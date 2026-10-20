@@ -4,8 +4,8 @@
 |---|---|
 | Installed assembly compatibility | Release builds against 1.2.0-rc3 pass; inherited nullable warnings remain. |
 | Protocol | 608 console assertions pass: frame truncation/fuzzing, 4 participants, concurrent sequencing, replay, gaps, snapshot metadata/hash/quota/expiry. |
-| Runtime loading | Two isolated real Unity 6000.3.19f1 clients load the mod. QA verifies critical Harmony hooks. Batchmode uses a QA keyboard with an explicit layout. No gameplay PASS yet. |
-| Host + client | QA-only bot and local sandbox prepared; not yet passed. |
+| Runtime loading | Two isolated real Unity 6000.3.19f1 clients load the mod; critical Harmony hooks checked. Clean exits and no exceptions in the successful run. |
+| Host + client | Loopback IP gate passed on a fresh world: snapshot equality at step 326; shared digests at 400/500; 200+ steps after join on both. `local/qa/run-20261020-184821/` (ignored local evidence). No production/action fixture yet. |
 | Simulation equality | Fixed synchronous 20 Hz, zero worker threads, no camera LOD; checksum includes island/building state, configuration, trains/cargo, global signals and research. Serializer order may still cause false mismatches. Not established as deterministic. |
 | Network and performance | WAN, Steam relay, loss/delay, 3–4 clients and large factories not run. |
 

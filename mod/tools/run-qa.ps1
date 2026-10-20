@@ -14,11 +14,14 @@ $oldStop = $env:SHAPEZ2_COOP_QA_STOP_FILE
 $passed = $false
 $cleanExit = $true
 $problem = ''
+$exitCodes = @{}
 function Read-Log([string]$role) {
     $file = Join-Path $run "$role.log"
     if (!(Test-Path -LiteralPath $file)) { return '' }
     if ((Get-Item -LiteralPath $file).Length -gt 16MB) { throw "$role log exceeded QA limit" }
-    return [IO.File]::ReadAllText($file)
+    $stream = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    $reader = [IO.StreamReader]::new($stream)
+    try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
 }
 function Start-Role([string]$role, [string]$profile) {
     $env:SHAPEZ2_COOP_QA_PROFILE = Join-Path $qa $profile
@@ -57,6 +60,11 @@ try {
         ForEach-Object { $_.Groups[1].Value }
     $matches = @($clientChecks | Where-Object { $hostChecks -contains $_ })
     if ($matches.Count -lt 2 -or $hostLog -notmatch 'QA:SNAPSHOT_MATCH') { throw 'Insufficient shared-step checksum evidence' }
+    if ($clientLog -notmatch 'QA:ACTIONS_PASS' -or $clientLog -notmatch 'QA:STALE_DELETE_PRESERVED' -or
+        $clientLog -notmatch 'QA:INTENT_REJECT') { throw 'Missing client action/rejection evidence' }
+    foreach ($log in @($hostLog,$clientLog)) {
+        if ($log -notmatch 'QA:OUTPUT_CLEARED' -or $log -notmatch 'QA:OUTPUT_REFILLED') { throw 'Missing production evidence' }
+    }
     if ("$hostLog`n$clientLog" -match '(?m)^.*Exception[: ]') { throw 'Network checks completed, but runtime exceptions remain; inspect logs' }
     $passed = $true
 } catch {
@@ -65,15 +73,21 @@ try {
     foreach ($role in $processes.Keys) { New-Item -ItemType File -Path (Join-Path $run "$role.stop") -Force | Out-Null }
     foreach ($role in $processes.Keys) {
         $process = $processes[$role]
-        if (!$process.WaitForExit(10000)) {
+        if (!$process.WaitForExit(30000)) {
             $cleanExit = $false
+            $problem += " $role shutdown timed out."
             if ($process.Path -eq $exe) { $process.Kill(); $process.WaitForExit() }
         }
-        if ($process.ExitCode -ne 0) { $cleanExit = $false }
+        $exitCodes[$role] = $process.ExitCode
+        if ($process.ExitCode -ne 0) { $cleanExit = $false; $problem += " $role exit code $($process.ExitCode)." }
+        if ((Read-Log $role) -match '(?m)^.*Exception[: ]|QA:FAIL|Stopped:') {
+            $cleanExit = $false
+            $problem += " $role log contains a runtime/shutdown fault."
+        }
     }
     $env:SHAPEZ2_COOP_QA_PROFILE = $oldProfile
     $env:SHAPEZ2_COOP_QA_STOP_FILE = $oldStop
-    $result = @{ passed=($passed -and $cleanExit); cleanExit=$cleanExit; problem=$problem; logs=$run }
+    $result = @{ passed=($passed -and $cleanExit); cleanExit=$cleanExit; exitCodes=$exitCodes; problem=$problem; logs=$run }
     $result | ConvertTo-Json | Set-Content (Join-Path $run 'result.json')
     $result | ConvertTo-Json | Write-Output
 }

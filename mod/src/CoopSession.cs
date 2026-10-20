@@ -85,10 +85,16 @@ namespace Shapez2Multiplayer
         public static bool Submit(IPlayerAction action)
             => SubmitEncoded(PacketExtensions.Encode(new PlayerActionPacket(action)));
         public static bool SubmitEncoded(byte[] data)
+            => SubmitAtRevision(data, Revision);
+#if COOP_QA
+        public static bool QaSubmitAtRevision(byte[] data, ulong observedRevision)
+            => SubmitAtRevision(data, observedRevision);
+#endif
+        private static bool SubmitAtRevision(byte[] data, ulong observedRevision)
         {
             if (!Ready) return false;
             if (data == null || data.Length > 128 * 1024) return false;
-            var frame = new Frame(FrameKind.Intent, Epoch, ++RequestId, Revision, data);
+            var frame = new Frame(FrameKind.Intent, Epoch, ++RequestId, observedRevision, data);
             if (MultiplayerCore.Hosting) Receive(null, frame); else SendHost(frame);
             return true;
         }
@@ -108,7 +114,14 @@ namespace Shapez2Multiplayer
             var action = command.PlayerAction;
             if (!action.IsPossible(Shapez2Multiplayer.InteractionMode)) return false;
             Applying = true;
-            try { return Shapez2Multiplayer.PlayerActions.ExecuteActionImmediately_INTERNAL(action, out _); }
+            try
+            {
+                bool accepted = Shapez2Multiplayer.PlayerActions.ExecuteActionImmediately_INTERNAL(action, out _);
+#if COOP_QA
+                CoopQaProduction.ObserveClear(action, accepted);
+#endif
+                return accepted;
+            }
             finally { Applying = false; }
         }
         public static void Update()
@@ -214,6 +227,9 @@ namespace Shapez2Multiplayer
                         throw new InvalidDataException("World command diverged; reconnect required");
                     Revision = frame.Sequence; Status = "Connected"; break;
                 case FrameKind.Reject:
+#if COOP_QA
+                    Debug.Log("QA:INTENT_REJECT request=" + frame.RequestId + " revision=" + frame.Sequence);
+#endif
                     Status = "Edit rejected: another player changed the world; retry"; break;
                 case FrameKind.StateDigest:
                     if (frame.Sequence != Step || !frame.Payload.Span.SequenceEqual(CoopSimulation.Digest()))

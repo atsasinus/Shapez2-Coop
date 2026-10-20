@@ -63,12 +63,14 @@ namespace Shapez2Multiplayer
             foreach (var island in Shapez2Multiplayer.MapModel.Islands.OrderBy(i => i.Position.x).ThenBy(i => i.Position.y).ThenBy(i => i.Position.z))
             {
                 Encoding.Encode(island.Position, output);
+                Encoding.Encode(island.Transform.Rotation, output);
                 Encoding.Encode(island.Definition.Id, output);
                 island.State.Sync(visitor);
             }
             foreach (var building in Shapez2Multiplayer.MapModel.Buildings.OrderBy(b => b.Tile_G.x).ThenBy(b => b.Tile_G.y).ThenBy(b => b.Tile_G.z))
             {
                 Encoding.Encode(building.Tile_G, output);
+                Encoding.Encode(building.Rotation_G, output);
                 Encoding.Encode(building.Definition.Id, output);
                 building.State.Sync(visitor);
                 building.Configuration?.Sync(visitor);

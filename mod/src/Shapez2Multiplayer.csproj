@@ -233,7 +233,7 @@
   </PropertyGroup>
 <ItemGroup><ProjectReference Include="../protocol/Shapez2Coop.Protocol.csproj" /></ItemGroup>
 <PropertyGroup Condition="'$(CoopQa)' == 'true'"><DefineConstants>$(DefineConstants);COOP_QA</DefineConstants></PropertyGroup>
-<ItemGroup Condition="'$(CoopQa)' == 'true'"><Compile Include="../qa/CoopQaBot.cs" /></ItemGroup>
+<ItemGroup Condition="'$(CoopQa)' == 'true'"><Compile Include="../qa/*.cs" /></ItemGroup>
 <ItemGroup Condition="'$(CoopQa)' == 'true'">
   <Reference Include="Unity.InputSystem"><HintPath>$(SPZ2_PATH)\Unity.InputSystem.dll</HintPath><Private>False</Private></Reference>
 </ItemGroup>

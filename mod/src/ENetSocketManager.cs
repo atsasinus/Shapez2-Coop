@@ -86,8 +86,8 @@ namespace Shapez2Multiplayer
                         break;
 
                     case EventType.Receive:
-                        OnMessage(netEvent.Peer, netEvent.Packet);
-                        netEvent.Packet.Dispose();
+                        try { OnMessage(netEvent.Peer, netEvent.Packet); }
+                        finally { netEvent.Packet.Dispose(); }
                         break;
                 }
             }

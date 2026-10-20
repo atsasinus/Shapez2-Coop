@@ -18,6 +18,7 @@ namespace Shapez2Multiplayer
         private double deadline, menuReadyAt;
         private ulong? joinedStep;
         private string stopFile;
+        private readonly CoopQaActions actions = new CoopQaActions();
         private void Start()
         {
             stopFile = Environment.GetEnvironmentVariable("SHAPEZ2_COOP_QA_STOP_FILE");
@@ -46,7 +47,13 @@ namespace Shapez2Multiplayer
         private async void Update()
         {
             if (!string.IsNullOrEmpty(stopFile) && System.IO.File.Exists(stopFile))
-            { stopFile = null; Debug.Log("QA:SHUTDOWN"); Application.Quit(); return; }
+            {
+                stopFile = null; reported = true; Debug.Log("QA:SHUTDOWN");
+                MultiplayerCore.Disconnect(canReturnToMenu: false);
+                if (Shapez2Multiplayer.Game.IsGameInSession(out IGameStartOptions _))
+                    await Shapez2Multiplayer.GameOrchestrator.LoadMainMenu();
+                Application.Quit(); return;
+            }
             if (string.IsNullOrEmpty(role) || reported) return;
             if (Time.realtimeSinceStartupAsDouble > deadline || CoopSession.Faulted)
             { reported = true; Debug.LogError("QA:FAIL " + CoopSession.Status); return; }
@@ -61,6 +68,7 @@ namespace Shapez2Multiplayer
                     var data = Shapez2Multiplayer.GameOrchestrator.InitializationDependencyContainer.Resolve<IGameData>();
                     var config = GameParameters.DefaultForMode(data.GetGameModeDefinition(data.GameModeIds.First()));
                     await Shapez2Multiplayer.GameOrchestrator.LoadSession(new GameStartOptionsStartNew(config, false, "coop-qa-factory"));
+                    CoopQaProduction.Seed();
                     await MultiplayerCore.CreateLobby(steam: false, ENet: true);
                     Debug.Log("QA:HOST_READY");
                 }
@@ -71,6 +79,14 @@ namespace Shapez2Multiplayer
                 if (role == "host" && MultiplayerCore.socketManager.Connected.Count != 1) return;
                 if (role == "client" && !MultiplayerCore.connectionManager.FinishedConnecting) return;
                 if (!joinedStep.HasValue) joinedStep = CoopSession.StepCount;
+                CoopQaProduction.Tick(role);
+                if (role == "client")
+                {
+                    try { actions.Tick(); }
+                    catch (Exception ex) { reported = true; Debug.LogError("QA:FAIL " + ex); return; }
+                    if (!actions.Complete) return;
+                }
+                if (role == "host" && (CoopSession.EditRevision < 5 || !CoopQaProduction.Refilled)) return;
                 if (CoopSession.StepCount < joinedStep.Value + 200) return;
                 reported = true;
                 Debug.Log("QA:STEPS_PASS role=" + role + " step=" + CoopSession.StepCount + " digest=" + BitConverter.ToString(CoopSimulation.Digest()));

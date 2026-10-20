@@ -37,6 +37,7 @@ namespace Shapez2Multiplayer
 
         public override void OnMessage(IntPtr data, int size, long messageNum, long recvTime, int channel)
         {
+            if (size < 0 || size > 512 * 1024) { CoopSession.Fail("Oversized transport packet"); return; }
             var buffer = new byte[size];
             Marshal.Copy(data, buffer, 0, size);
             MessageEvent(buffer);

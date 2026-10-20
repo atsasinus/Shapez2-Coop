@@ -1,4 +1,4 @@
-﻿using Core.Localization;
+using Core.Localization;
 using Cysharp.Threading.Tasks;
 using ENet;
 using Game.Core.Modding;
@@ -32,7 +32,7 @@ namespace Shapez2Multiplayer
                 JoinLobby(lobby);
             };
             ENet.Library.Initialize();
-            SteamNetworkingUtils.SendBufferSize = 1024 * 1024;
+            if (SteamClient.IsValid) SteamNetworkingUtils.SendBufferSize = 1024 * 1024;
         }
         public static async Task JoinLobby(Lobby lobby)
         {
@@ -108,7 +108,7 @@ namespace Shapez2Multiplayer
                     Shapez2Multiplayer.SimulationSpeed.Speed = 1f;
                     socketManager = new ShapezSocketManager(SteamNetworkingSockets.CreateRelaySocket<SteamSocketManager>(0));
                 }
-                var lobby = await SteamMatchmaking.CreateLobbyAsync();
+                var lobby = await SteamMatchmaking.CreateLobbyAsync(4);
                 if (!lobby.HasValue)
                 {
                     Shapez2Multiplayer.logger.Error?.Log("Failed to create lobby");
@@ -122,7 +122,7 @@ namespace Shapez2Multiplayer
             if (ENet && !(Hosting && socketManager.SocketManagers.Any(s => s is ENetSocketManager)))
             {
                 var server = new Host();
-                server.Create(new Address() { Port = 7777 }, 100);
+                server.Create(new Address() { Port = 7777 }, 3);
                 if (Hosting)
                 {
                     socketManager.AddSocketManager(new ENetSocketManager(server));
@@ -250,10 +250,10 @@ namespace Shapez2Multiplayer
                     Shapez2Multiplayer.Research.PlayerLevelGoals.OnChanged.Unregister(MultiplayerEvents.OnResearchPlayerLevelGoalManagerChanged);
                     Shapez2Multiplayer.Research.Progress.OnChanged.Unregister(MultiplayerEvents.OnResearchUnlockProgressManagerChanged);
                     Shapez2Multiplayer.Research.UnlockManager.OnResearchManuallyUnlockedByPlayer.Unregister(MultiplayerEvents.OnResearchUnlockManagerResearchManuallyUnlockedByPlayer);
-                    Shapez2Multiplayer.GameSessionOrchestrator.LocalPlayer.InteractionState.OnStateChanged.Unregister(MultiplayerEvents.OnPlayerInteractionStateChanged);
-                    Shapez2Multiplayer.PlayerWaypoints.OnWaypointAdded.Unregister(MultiplayerEvents.OnWaypointAdded);
-                    Shapez2Multiplayer.PlayerWaypoints.OnWaypointChanged.Unregister(MultiplayerEvents.OnWaypointChanged);
-                    Shapez2Multiplayer.PlayerWaypoints.OnWaypointRemoved.Unregister(MultiplayerEvents.OnWaypointRemoved);
+                    Shapez2Multiplayer.GameSessionOrchestrator?.LocalPlayer.InteractionState.OnStateChanged.Unregister(MultiplayerEvents.OnPlayerInteractionStateChanged);
+                    Shapez2Multiplayer.PlayerWaypoints?.OnWaypointAdded.Unregister(MultiplayerEvents.OnWaypointAdded);
+                    Shapez2Multiplayer.PlayerWaypoints?.OnWaypointChanged.Unregister(MultiplayerEvents.OnWaypointChanged);
+                    Shapez2Multiplayer.PlayerWaypoints?.OnWaypointRemoved.Unregister(MultiplayerEvents.OnWaypointRemoved);
                     MultiplayerCore.socketManager.SendToAll(new DisconnectReasonPacket(MultiplayerCore.DisconnectReason.SessionClosed));
                     foreach (var sm in socketManager.SocketManagers)
                     {
@@ -269,18 +269,18 @@ namespace Shapez2Multiplayer
                     Shapez2Multiplayer.GameSessionOrchestrator?.LocalPlayer.HUDData.Pins.OnPinAdded.Unregister(MultiplayerEvents.OnPinAdded);
                     Shapez2Multiplayer.GameSessionOrchestrator?.LocalPlayer.HUDData.Pins.OnPinRemoved.Unregister(MultiplayerEvents.OnPinRemoved);
                     ((IEntityPlacementStateController?)Shapez2Multiplayer.EntityPlacementRunner)?.OnPlacementDataChanged.Unregister(MultiplayerEvents.OnPlacementDataChanged);
-                    Shapez2Multiplayer.GameSessionOrchestrator.LocalPlayer.InteractionState.OnStateChanged.Unregister(MultiplayerEvents.OnPlayerInteractionStateChanged);
-                    Shapez2Multiplayer.PlayerWaypoints.OnWaypointAdded.Unregister(MultiplayerEvents.OnWaypointAdded);
-                    Shapez2Multiplayer.PlayerWaypoints.OnWaypointChanged.Unregister(MultiplayerEvents.OnWaypointChanged);
-                    Shapez2Multiplayer.PlayerWaypoints.OnWaypointRemoved.Unregister(MultiplayerEvents.OnWaypointRemoved);
+                    Shapez2Multiplayer.GameSessionOrchestrator?.LocalPlayer.InteractionState.OnStateChanged.Unregister(MultiplayerEvents.OnPlayerInteractionStateChanged);
+                    Shapez2Multiplayer.PlayerWaypoints?.OnWaypointAdded.Unregister(MultiplayerEvents.OnWaypointAdded);
+                    Shapez2Multiplayer.PlayerWaypoints?.OnWaypointChanged.Unregister(MultiplayerEvents.OnWaypointChanged);
+                    Shapez2Multiplayer.PlayerWaypoints?.OnWaypointRemoved.Unregister(MultiplayerEvents.OnWaypointRemoved);
                     connectionManager.ConnectionManager.Close();
                     connectionManager = null;
                 }
                 ConnectingDialog?.OnClosed.Unregister(DialogClosed);
                 ConnectingDialog?.Close();
                 ConnectingDialog = null;
-                ChunkedPacket.ChunkedPacketCache.Clear();
-                ChunkedPacket.HostChunkedPacketCache.Clear();
+                ChunkedPacket.Reset();
+                CoopSession.Reset();
                 Lobby?.Leave();
                 Lobby = null;
                 //if (serviceProfile != null) serviceDiscovery?.Unadvertise(serviceProfile);
@@ -343,9 +343,18 @@ namespace Shapez2Multiplayer
         }
         public static void Update()
         {
-            //ChunkedPacket.Update();
-            socketManager?.Update();
-            connectionManager?.Update();
+            try
+            {
+                ChunkedPacket.Update();
+                socketManager?.Update();
+                connectionManager?.Update();
+                CoopSession.Update();
+            }
+            catch (Exception ex)
+            {
+                Shapez2Multiplayer.logger.Error?.Log(ex.ToString());
+                CoopSession.Fail(ex.Message);
+            }
         }
     }
 }

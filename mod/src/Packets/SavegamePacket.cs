@@ -1,4 +1,4 @@
-﻿using Core.Localization;
+using Core.Localization;
 using Cysharp.Threading.Tasks;
 using DG.Tweening;
 using Game.Core.Serialization;
@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using static Shapez2Multiplayer.MultiplayerCore;
 
 namespace Shapez2Multiplayer.Packets
@@ -43,35 +44,38 @@ namespace Shapez2Multiplayer.Packets
 
         public void Handle(IConnection? connection, InfoConnection? routedFrom = null)
         {
-            if (MultiplayerCore.Hosting) return;
-            Shapez2Multiplayer.logger.Info?.Log($"Attempting to load save due to SavegamePacket with Uid: {Uid}");
-            MultiplayerCore.ConnectingDialog?.OnClosed.Unregister(MultiplayerCore.DialogClosed);
-            MultiplayerCore.ConnectingDialog?.Close();
-            MultiplayerCore.ConnectingDialog = null;
-            MultiplayerCore.connectionManager.StartSeperateThread();
-            Sequence? sequence = Shapez2Multiplayer.MainMenuOrchestratorFadeOut(false);
-            if (sequence == null) return;
-            sequence.OnComplete(() =>
+            if (!MultiplayerCore.Client || MultiplayerCore.connectionManager.FinishedConnecting ||
+                !Shapez2Multiplayer.Game.IsGameInMainMenu() || CoopSession.ReplicaWorld)
+                throw new InvalidDataException("Unexpected world snapshot");
+            _ = LoadSnapshot(MultiplayerCore.connectionManager);
+        }
+
+        private async Task LoadSnapshot(ShapezConnectionManager joining)
+        {
+            CoopSession.ReplicaWorld = true;
+            try
             {
+                MultiplayerCore.ConnectingDialog?.OnClosed.Unregister(MultiplayerCore.DialogClosed);
+                MultiplayerCore.ConnectingDialog?.Close();
+                MultiplayerCore.ConnectingDialog = null;
                 IReadOnlyDictionary<Type, IDataSerializer> dataSerializers = Shapez2Multiplayer.MainMenuOrchestratorBackgroundGameOrchestrator.DataSerializers;
+                SavegameEncoded.Position = 0;
                 SavegameBlobReader savegameBlobReader = new SaveFileAccessor(Shapez2Multiplayer.MainMenuOrchestratorLogger).ReadFromStream(SavegameEncoded, dataSerializers);
-                Shapez2Multiplayer.MainMenuOrchestratorFlowNavigator.LoadSession(new GameStartOptionsContinueExisting(savegameBlobReader, false, Uid, false)).ContinueWith(_ =>
+                // The normal navigator owns its loading screen. A menu fade may return null
+                // while another transition is active, so never make loading depend on it.
+                // A unique local UID additionally prevents collision with a player's saves.
+                await Shapez2Multiplayer.GameOrchestrator.LoadSession(new GameStartOptionsContinueExisting(
+                    savegameBlobReader, false, "coop-replica-" + Guid.NewGuid().ToString("N"), false));
+                CoopSession.ReplicaSession = Shapez2Multiplayer.GameSessionOrchestrator;
+                if (!ReferenceEquals(joining, MultiplayerCore.connectionManager))
                 {
-                    if (!MultiplayerCore.Client)
-                    {
-                        Shapez2Multiplayer.GameSessionOrchestrator.AudioManager.FadeOutMusic();
-                        Shapez2Multiplayer.GameFlowNavigator.LoadMainMenu().ContinueWith(async _ =>
-                        {
-                            await UniTask.DelayFrame(1);
-                            Shapez2Multiplayer.MainMenuOrchestratorDialogStack.Show<HUDDialogSimpleInfo>(Globals.Resources.UIDialogSimpleInfoPrefab).Init("multiplayer.disconnected-dialog.title".T(), GetReasonTranslation(DisconnectReason.Lostconnection));
-                            Shapez2Multiplayer.MainMenuStateManagerUISoundPlayer.PlayError();
-                        });
-                        return;
-                    }
-                    MultiplayerCore.connectionManager.StopSeperateThread();
-                    MultiplayerCore.connectionManager.HostDrawer = Shapez2Multiplayer.CreateOtherPlayerEntityPlacementDrawer();
-                    MultiplayerCore.connectionManager.HostBuildingMassSelection = HUDMultiplayerMassSelectionsHost.Instance.CreateOtherPlayerHUDBuildingMassSelection(null);
-                    MultiplayerCore.connectionManager.HostIslandMassSelection = HUDMultiplayerMassSelectionsHost.Instance.CreateOtherPlayerHUDIslandMassSelection(null);
+                    await Shapez2Multiplayer.GameOrchestrator.LoadMainMenu();
+                    return;
+                }
+                if (CoopSession.ReplicaSession == null) throw new InvalidOperationException("Snapshot world failed to load");
+                    joining.HostDrawer = Shapez2Multiplayer.CreateOtherPlayerEntityPlacementDrawer();
+                    joining.HostBuildingMassSelection = HUDMultiplayerMassSelectionsHost.Instance.CreateOtherPlayerHUDBuildingMassSelection(null);
+                    joining.HostIslandMassSelection = HUDMultiplayerMassSelectionsHost.Instance.CreateOtherPlayerHUDIslandMassSelection(null);
                     Shapez2Multiplayer.GameSessionOrchestrator.LocalPlayer.HUDData.Pins.OnPinAdded.Register(MultiplayerEvents.OnPinAdded);
                     Shapez2Multiplayer.GameSessionOrchestrator.LocalPlayer.HUDData.Pins.OnPinRemoved.Register(MultiplayerEvents.OnPinRemoved);
                     ((IEntityPlacementStateController)Shapez2Multiplayer.EntityPlacementRunner).OnPlacementDataChanged.Register(MultiplayerEvents.OnPlacementDataChanged);
@@ -80,8 +84,8 @@ namespace Shapez2Multiplayer.Packets
                     Shapez2Multiplayer.PlayerWaypoints.OnWaypointAdded.Register(MultiplayerEvents.OnWaypointAdded);
                     Shapez2Multiplayer.PlayerWaypoints.OnWaypointChanged.Register(MultiplayerEvents.OnWaypointChanged);
                     Shapez2Multiplayer.PlayerWaypoints.OnWaypointRemoved.Register(MultiplayerEvents.OnWaypointRemoved);
-                    MultiplayerCore.connectionManager.FinishedConnecting = true;
-                    foreach (var connection in MultiplayerCore.connectionManager.Connections)
+                    joining.FinishedConnecting = true;
+                    foreach (var connection in joining.Connections)
                     {
                         if (connection.UniversalId != MultiplayerCore.connectionManager.UniversalId)
                         {
@@ -90,10 +94,14 @@ namespace Shapez2Multiplayer.Packets
                             MultiplayerCore.connectionManager.PlayersIslandMassSelections.Add(connection.UniversalId, HUDMultiplayerMassSelectionsHost.Instance.CreateOtherPlayerHUDIslandMassSelection(connection));
                         }
                     }
-                    MultiplayerCore.connectionManager.Send(new FinishedConnectingPacket());
-                });
-                Shapez2Multiplayer.MainMenuOrchestratorAnalyticsTracker.UIMenuContinueExistingGame();
-            });
+                    joining.Send(new FinishedConnectingPacket(CoopSession.StepCount, CoopSession.EditRevision, CoopSimulation.Digest()));
+            }
+            catch (Exception ex)
+            {
+                Shapez2Multiplayer.logger.Error?.Log(ex.ToString());
+                CoopSession.Fail("Snapshot loading failed: " + ex.Message);
+            }
+            finally { SavegameEncoded.Dispose(); }
         }
     }
 }

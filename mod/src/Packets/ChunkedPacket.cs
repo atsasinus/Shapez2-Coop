@@ -1,205 +1,86 @@
-﻿using Core.Localization;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-
+using System.Security.Cryptography;
+using Shapez2Coop.Protocol;
+using UnityEngine;
 namespace Shapez2Multiplayer.Packets
 {
-    public class ChunkedPacket : IPacket
+    public sealed class ChunkedPacket : IPacket
     {
-        public static readonly Dictionary<uint, Dictionary<uint, ChunkCacheData>> ChunkedPacketCache = new Dictionary<uint, Dictionary<uint, ChunkCacheData>>();
-        public static readonly Dictionary<uint, ChunkCacheData> HostChunkedPacketCache = new Dictionary<uint, ChunkCacheData>();
+        public const int ChunkThreshold = 256 * 1024;
+        public const int MaxTotalDataSize = SnapshotAssembler.DefaultMaxSnapshotBytes;
         public static readonly List<Tuple<ChunkedPacket, IConnection, Packet>> ToSend = new List<Tuple<ChunkedPacket, IConnection, Packet>>();
-        public static uint? WaitingFromId;
-        public static uint CurrentId = 0;
-
-        public byte[] Data;
+        private static readonly HashSet<uint> Registered = new HashSet<uint>();
+        private static Guid CacheEpoch = Guid.NewGuid();
+        private static SnapshotAssembler Receiver = new SnapshotAssembler(CacheEpoch);
+        private static uint CurrentId;
         public uint Id;
-        public bool cancel = false;
-        public bool first = false;
-        public bool finished = false;
-        public uint Index;
-        public uint TotalChunks;
-        public const int ChunkSize = 1024 * 128;
-        public const int ChunkThreshold = 1024 * 256;
-        public const int MaxTotalDataSize = 1024 * 1024 * 100; // 100 MB
-        //public const float SendDelay = 1f;
-        //static float SendTimer = 0.0f;
+        private byte[] Payload;
         public ChunkedPacket() { }
-        public static void Send(byte[] data, IConnection sender, Packet packet)
+        public static void Reset()
         {
-            var id = CurrentId++;
-            uint index = 1;
-            uint total = (uint)MathF.Ceiling((float)data.Length / ChunkSize);
-            var toSendCount = ToSend.Count;
-            for (int i = 0; i < data.Length; i += ChunkSize)
+            Receiver.Dispose(); CacheEpoch = Guid.NewGuid(); Receiver = new SnapshotAssembler(CacheEpoch);
+            Registered.Clear(); ToSend.Clear(); CurrentId = 0;
+        }
+        public static void Remove(IConnection peer)
+        {
+            Receiver.RemovePeer(peer.UniversalId); Registered.Remove(peer.UniversalId);
+            ToSend.RemoveAll(c => c.Item2.Equals(peer));
+        }
+        public static void Send(byte[] data, IConnection peer, Packet type)
+        {
+            if (data.Length > MaxTotalDataSize || ToSend.Sum(c => (long)c.Item1.Payload.Length) + data.Length > 128L * 1024 * 1024)
+                throw new InvalidDataException("Outgoing snapshot budget exhausted");
+            using var sha = SHA256.Create();
+            var hash = sha.ComputeHash(data);
+            var transfer = Guid.NewGuid(); var id = ++CurrentId;
+            for (int offset = 0, index = 0; offset < data.Length; offset += SnapshotChunkCodec.ChunkSize, index++)
             {
-                var chunk = new ChunkedPacket(id, i == 0, data.Skip(i).Take(ChunkSize).ToArray(), i + ChunkSize >= data.Length, index, total);
-                ToSend.Add(new Tuple<ChunkedPacket, IConnection, Packet>(chunk, sender, packet));
-                index++;
+                var chunk = new SnapshotChunk(transfer, data.Length, index, hash,
+                    data.AsSpan(offset, Math.Min(SnapshotChunkCodec.ChunkSize, data.Length - offset)));
+                ToSend.Add(Tuple.Create(new ChunkedPacket { Id = id, Payload = SnapshotChunkCodec.Encode(chunk) }, peer, type));
             }
-            if (toSendCount == 0)
+        }
+        // Reliable transfers must finish; a partially sent transfer cannot be silently cancelled.
+        public static void Cancel(uint id) { }
+        public static void Cancel(Packet type) { }
+        public static void Update()
+        {
+            for (int i = 0; i < 4 && ToSend.Count > 0; i++)
             {
-                SendOne();
+                var item = ToSend[0]; ToSend.RemoveAt(0);
+                if (!item.Item2.Send(PacketExtensions.Encode(item.Item1), Packet.Chunked))
+                { Remove(item.Item2); item.Item2.Close(); }
             }
-        }
-        public static void Cancel(Packet packet)
-        {
-            foreach (var id in ToSend.Where(c => c.Item3 == packet).Select(c => c.Item1.Id).Distinct())
+            foreach (var peer in Receiver.Expire((long)(Time.realtimeSinceStartupAsDouble * 1000)))
             {
-                Cancel(id);
+                var connection = MultiplayerCore.socketManager?.Connected.FirstOrDefault(c => c.UniversalId == peer);
+                if (connection != null) connection.Close(); else if (MultiplayerCore.Client) CoopSession.Fail("Snapshot transfer timed out");
             }
         }
-        public static void Cancel(uint id)
-        {
-            if (ToSend.Count == 0) return;
-            var IConnection = ToSend.FirstOrDefault(c => c.Item1.Id == id)?.Item2;
-            if (IConnection == null) return;
-            //var containsFirst = ToSend.Any(c => c.Item1.Id == id && c.Item1.first);
-            var needsCancel = ToSend[0].Item1.Id == id && !ToSend[0].Item1.first;
-            ToSend.RemoveAll(c => c.Item1.Id == id);
-            //if (containsFirst) return;
-            if (!needsCancel) return;
-            MultiplayerCore.socketManager?.SendTo(new ChunkedPacket(id, true), IConnection);
-            MultiplayerCore.connectionManager?.Send(new ChunkedPacket(id, true));
-        }
-        public ChunkedPacket(uint id, bool first, byte[] data, bool finished, uint index, uint totalChunks)
-        {
-            Id = id;
-            this.first = first;
-            Data = data;
-            this.finished = finished;
-            Index = index;
-            TotalChunks = totalChunks;
-        }
-        public ChunkedPacket(uint id, bool cancel)
-        {
-            Id = id;
-            this.cancel = cancel;
-        }
-
         public void Decode(Stream stream)
         {
-            using BinaryReader reader = new BinaryReader(stream);
-            Id = reader.ReadUInt32();
-            cancel = reader.ReadBoolean();
-            if (cancel) return;
-            first = reader.ReadBoolean();
-            Index = reader.ReadUInt32();
-            TotalChunks = reader.ReadUInt32();
-            var length = reader.ReadInt32();
-            if (length > ChunkSize)
-            {
-                cancel = true;
-                return;
-            }
-            Data = reader.ReadBytes(length);
-            finished = reader.ReadBoolean();
+            int length = checked((int)(stream.Length - stream.Position));
+            if (length > SnapshotChunkCodec.HeaderSize + SnapshotChunkCodec.ChunkSize) throw new InvalidDataException("Oversized chunk");
+            using var reader = new BinaryReader(stream);
+            Payload = reader.ReadBytes(length);
+            SnapshotChunkCodec.Decode(Payload);
         }
-
-        public bool Encode(Stream stream)
-        {
-            using BinaryWriter writer = new BinaryWriter(stream);
-            writer.Write(Id);
-            writer.Write(cancel);
-            if (cancel) return true;
-            writer.Write(first);
-            writer.Write(Index);
-            writer.Write(TotalChunks);
-            writer.Write(Data.Length);
-            writer.Write(Data);
-            writer.Write(finished);
-            return true;
-        }
-
+        public bool Encode(Stream stream) { stream.Write(Payload, 0, Payload.Length); return true; }
         public void Handle(IConnection? connection, InfoConnection? routedFrom = null)
         {
-            var from = connection?.UniversalId;
-            var cache = from == null ? HostChunkedPacketCache : ChunkedPacketCache[from.Value];
-            if (first)
-            {
-                cache[Id] = new ChunkCacheData(TotalChunks);
-            }
-            if (!cache.ContainsKey(Id))
-            {
-                Shapez2Multiplayer.logger.Error.Log("Chunked packet received with id " + Id + " but no cache entry was found.");
-                return;
-            }
-            var cacheData = cache[Id];
-            if (cancel)
-            {
-                cacheData.Stream.Dispose();
-                cache.Remove(Id);
-                return;
-            }
-            if (Index != cacheData.Index+1)
-            {
-                Shapez2Multiplayer.logger.Error.Log("Chunked packet received out of order with id " + Id + " but index " + Index + " was received instead of " + (cacheData.Index+1) + ". Discarding Entire Chunked Packet.");
-                cacheData.Stream.Dispose();
-                cache.Remove(Id);
-                return;
-            }
-            cacheData.Index = Index;
-            if (cacheData.Stream.Length + Data.Length > MaxTotalDataSize)
-            {
-                Shapez2Multiplayer.logger.Error.Log("Chunked packet with id " + Id + " exceeded the max total data size. Discarding Entire Chunked Packet.");
-                cacheData.Stream.Dispose();
-                cache.Remove(Id);
-                return;
-            }
-            cacheData.Stream.Write(Data);
-            Data = null;
-            if (MultiplayerCore.Client && !MultiplayerCore.connectionManager.FinishedConnecting && MultiplayerCore.ConnectingDialog != null)
-            {
-                MultiplayerCore.ConnectingDialog.Init("multiplayer.connecting-dialog.title".T(), new CombinedText("multiplayer.connecting-dialog.description".T(), new RawText("\n"), "multiplayer.connecting-dialog.recieving-data".T(), new RawText($" {cacheData.Index}/{cacheData.TotalChunks}")), "multiplayer.connecting-dialog.cancel".T());
-            }
-            MultiplayerCore.socketManager?.SendTo(new ChunkReceivedPacket(), connection);
-            MultiplayerCore.connectionManager?.Send(new ChunkReceivedPacket());
-            if (!finished) return;
-            cacheData.Stream.Seek(0, SeekOrigin.Begin);
-            var data = cacheData.Stream.ToArray();
-            cacheData.Stream.Dispose();
-            cache.Remove(Id);
-            MultiplayerCore.socketManager?.OnMessage(connection, data);
-            MultiplayerCore.connectionManager?.OnMessage(data);
-        }
-
-        //public static void Update()
-        //{
-        //    SendTimer += Time.deltaTime;
-        //    if (SendTimer >= SendDelay)
-        //    {
-        //        SendTimer = 0.0f;
-        //        if (ToSend.Count > 0)
-        //        {
-        //            var data = ToSend[0];
-        //            ToSend.RemoveAt(0);
-        //            MultiplayerCore.socketManager?.SendTo(data.Item1, data.Item2);
-        //            MultiplayerCore.connectionManager?.Send(data.Item1);
-        //        }
-        //    }
-        //}
-        public static void SendOne()
-        {
-            if (ToSend.Count > 0)
-            {
-                var data = ToSend[0];
-                ToSend.RemoveAt(0);
-                WaitingFromId = data.Item2.UniversalId;
-                MultiplayerCore.socketManager?.SendTo(data.Item1, data.Item2);
-                MultiplayerCore.connectionManager?.Send(data.Item1);
-            }
-        }
-        public class ChunkCacheData
-        {
-            public MemoryStream Stream = new MemoryStream();
-            public uint Index = 0;
-            public uint TotalChunks;
-            public ChunkCacheData(uint totalChunks)
-            {
-                TotalChunks = totalChunks;
-            }
+            uint peer = connection?.UniversalId ?? 0;
+            if (Registered.Add(peer) && !Receiver.RegisterPeer(peer)) throw new InvalidDataException("Chunk peer limit");
+            var result = Receiver.Add(peer, new Frame(FrameKind.SnapshotChunk, CacheEpoch, 0, 0, Payload),
+                (long)(Time.realtimeSinceStartupAsDouble * 1000));
+            if (result == null) return;
+            var bytes = result.Data.ToArray();
+            var inner = NetworkBoundary.Unpack(bytes);
+            if (PacketExtensions.PacketFromData(inner) == Packet.Chunked) throw new InvalidDataException("Nested chunk transfer");
+            if (connection != null) MultiplayerCore.socketManager.OnMessage(connection, bytes);
+            else MultiplayerCore.connectionManager.OnMessage(bytes);
         }
     }
 }

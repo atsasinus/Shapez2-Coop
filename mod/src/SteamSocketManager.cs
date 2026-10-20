@@ -34,6 +34,7 @@ namespace Shapez2Multiplayer
 
         public override void OnMessage(Connection connection, NetIdentity identity, IntPtr data, int size, long messageNum, long recvTime, int channel)
         {
+            if (size < 0 || size > 512 * 1024) { connection.Close(); return; }
             var buffer = new byte[size];
             Marshal.Copy(data, buffer, 0, size);
             MessageEvent(_SteamConnections[connection.Id], buffer);

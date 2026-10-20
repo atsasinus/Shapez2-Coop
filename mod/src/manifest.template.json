@@ -1,11 +1,11 @@
 ﻿{
-  "Version": "1.1.9",
-  "Description": "A Multiplayer Mod For Shapez 2",
-  "Author": "Bknibb",
+  "Version": "0.2.0-alpha.1",
+  "Description": "Experimental host-ordered co-op fork. Gameplay validation incomplete.",
+  "Author": "Shapez2 Co-op contributors; based on Bknibb",
   "AffectsSaveGames": false,
-  "DisablesAchievements": false,
+  "DisablesAchievements": true,
   "SaveGameCompabilityRange": "*",
-  "GameVersionSupportRange": ">=1.2.0",
+  "GameVersionSupportRange": ">=1.2.0-rc3 <1.3.0",
   "Assemblies": [
     "Shapez2Multiplayer.dll"
   ],

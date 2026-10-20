@@ -1,4 +1,4 @@
-﻿using Core.Collections.Disposables;
+using Core.Collections.Disposables;
 using Core.Dependency;
 using Core.Events;
 using Core.Localization;
@@ -28,6 +28,7 @@ using ILogger = Core.Logging.ILogger;
 
 namespace Shapez2Multiplayer
 {
+    [HarmonyPatch]
     public class Shapez2Multiplayer : IMod
     {
         public static ILogger logger;
@@ -80,10 +81,13 @@ namespace Shapez2Multiplayer
             Shapez2Multiplayer.logger = logger;
             harmony = new Harmony("bknibb.Shapez2Multiplayer");
             harmony.PatchAll(Assembly.GetExecutingAssembly());
-            harmony.PatchAll(typeof(Shapez2Multiplayer));
+            // Assembly discovery requires the class annotation, even for method-level patches.
             dontDestroyObject = new GameObject("MultiplayerDontDestroyObject");
             GameObject.DontDestroyOnLoad(dontDestroyObject);
             dontDestroyObject.AddComponent<MultiplayerDontDestroyObject>();
+#if COOP_QA
+            dontDestroyObject.AddComponent<CoopQaBot>();
+#endif
             MultiplayerCore.Initialize();
             GameOrchestrator = GameBootstrapper.GameOrchestrator;
             Game = GameOrchestrator.Game;
@@ -329,31 +333,12 @@ namespace Shapez2Multiplayer
         public static IPlayerAction DebugLastAction;
 #endif
         [HarmonyPatch(typeof(PlayerActionManager), nameof(PlayerActionManager.TryScheduleAction))]
+        [HarmonyPrefix]
         public static bool TryScheduleActionPrefix(IPlayerAction action, ref bool __result)
         {
-            if (!MultiplayerCore.Client) return true;
-            if (!(action is LevelUpLinearUpgradePlayerAction || action is ResearchUpgradePlayerAction)) return true;
-            MultiplayerCore.connectionManager.Send(new PlayerActionPacket(action));
-            __result = false;
+            if (!CoopSession.Active || CoopSession.Applying) return true;
+            __result = CoopSession.Submit(action);
             return false;
-        }
-        [HarmonyPatch(typeof(PlayerActionManager), nameof(PlayerActionManager.TryScheduleAction))]
-        [HarmonyPostfix]
-        public static void TryScheduleActionPostfix(IPlayerAction action, bool __result)
-        {
-            //if (__result && CurrentPlacement != null && InExecutePlacementAction)
-            //{
-            //    var packet = new PlacementPacket(CurrentPlacement);
-            //    MultiplayerCore.SendToAll(packet);
-            //}
-            //CurrentPlacement = null;
-            if (!__result) return;
-            if (!ActionDetection) return;
-#if DEBUG
-            DebugLastAction = action;
-#endif
-            if ((action is LevelUpLinearUpgradePlayerAction || action is ResearchUpgradePlayerAction) && MultiplayerCore.Hosting) MultiplayerCore.socketManager.SendToAll(new SyncResearchManagerPacket(Research));
-            MultiplayerCore.SendToAll(new PlayerActionPacket(action));
         }
         [HarmonyPatch(typeof(GameOrchestrator), "UnloadCurrentState")]
         [HarmonyPrefix]
@@ -393,177 +378,6 @@ namespace Shapez2Multiplayer
             __instance.ExecuteActionImmediately_INTERNAL(action, out var _);
             WaitingActions.Remove(action);
             return false;
-        }
-        public static IPlayerAction? LastActionOnUndoStack;
-        [HarmonyPatch(typeof(PlayerActionManager), "Undo")]
-        [HarmonyPrefix]
-        public static void PlayerActionManagerUndoPrefix(PlayerActionManager __instance, List<IPlayerAction> ___UndoStack)
-        {
-            if (!__instance.HasActionsOnUndoStack)
-            {
-                LastActionOnUndoStack = null;
-                return;
-            }
-            LastActionOnUndoStack = ___UndoStack[^1];
-            if (___UndoStack[^1] is ActionModifyIsland actionModifyIsland)
-            {
-                MultiplayerCore.SendToAll(new PlayerActionPacket(new ActionModifyIsland(actionModifyIsland.Map, actionModifyIsland.Executor, new ActionModifyIsland.Payload(actionModifyIsland.Data.Delete, actionModifyIsland.Data.IgnorePlacementBlueprintCost, actionModifyIsland.Data.RefundDeletionBlueprintCost))));
-            }
-            else if (___UndoStack[^1] is ActionModifyBuildings actionModifyBuildings)
-            {
-                MultiplayerCore.SendToAll(new PlayerActionPacket(new ActionModifyBuildings(actionModifyBuildings.Map, actionModifyBuildings.Executor, new ModifyBuildingsPayload(Array.Empty<PlaceBuildingPayload>(), actionModifyBuildings.Data.Delete, actionModifyBuildings.Data.BlueprintCurrencyModification), actionModifyBuildings.UseBunchEditMode)));
-            }
-            else if (___UndoStack[^1] is CombinedUndoablePlayerAction combinedUndoablePlayerAction)
-            {
-                MultiplayerCore.SendToAll(new PlayerActionPacket(new CombinedUndoablePlayerAction(combinedUndoablePlayerAction.Actions.Select(action =>
-                {
-                    if (action is ActionModifyIsland actionModifyIsland1)
-                    {
-                        return new ActionModifyIsland(actionModifyIsland1.Map, actionModifyIsland1.Executor, new ActionModifyIsland.Payload(actionModifyIsland1.Data.Delete, actionModifyIsland1.Data.IgnorePlacementBlueprintCost, actionModifyIsland1.Data.RefundDeletionBlueprintCost));
-                    }
-                    else if (action is ActionModifyBuildings actionModifyBuildings1)
-                    {
-                        return new ActionModifyBuildings(actionModifyBuildings1.Map, actionModifyBuildings1.Executor, new ModifyBuildingsPayload(Array.Empty<PlaceBuildingPayload>(), actionModifyBuildings1.Data.Delete, actionModifyBuildings1.Data.BlueprintCurrencyModification), actionModifyBuildings1.UseBunchEditMode);
-                    }
-                    else
-                    {
-                        return action;
-                    }
-                }))));
-            }
-            else
-            {
-                MultiplayerCore.SendToAll(new PlayerActionPacket(___UndoStack[^1]));
-            }
-        }
-        [HarmonyPatch(typeof(PlayerActionManager), "Undo")]
-        [HarmonyPostfix]
-        public static void PlayerActionManagerUndoPostfix(/*List<IPlayerAction> ___UndoStack*/)
-        {
-            //if (LastActionOnUndoStack != null && (___UndoStack.Count == 0 || ___UndoStack[^1] != LastActionOnUndoStack))
-            //{
-            //    MultiplayerCore.SendToAll(new PlayerActionPacket(LastActionOnUndoStack));
-            //}
-            if (LastActionOnUndoStack != null)
-            {
-                if (LastActionOnUndoStack is ActionModifyIsland actionModifyIsland)
-                {
-                    MultiplayerCore.SendToAll(new PlayerActionPacket(new ActionModifyIsland(actionModifyIsland.Map, actionModifyIsland.Executor, new ActionModifyIsland.Payload(actionModifyIsland.Data.Place, actionModifyIsland.Data.IgnorePlacementBlueprintCost, actionModifyIsland.Data.RefundDeletionBlueprintCost))));
-                }
-                else if (LastActionOnUndoStack is ActionModifyBuildings actionModifyBuildings)
-                {
-                    MultiplayerCore.SendToAll(new PlayerActionPacket(new ActionModifyBuildings(actionModifyBuildings.Map, actionModifyBuildings.Executor, new ModifyBuildingsPayload(actionModifyBuildings.Data.Place), actionModifyBuildings.UseBunchEditMode)));
-                }
-                else if (LastActionOnUndoStack is CombinedUndoablePlayerAction combinedUndoablePlayerAction)
-                {
-                    MultiplayerCore.SendToAll(new PlayerActionPacket(new CombinedUndoablePlayerAction(combinedUndoablePlayerAction.Actions.Select(action =>
-                    {
-                        if (action is ActionModifyIsland actionModifyIsland1)
-                        {
-                            return new ActionModifyIsland(actionModifyIsland1.Map, actionModifyIsland1.Executor, new ActionModifyIsland.Payload(actionModifyIsland1.Data.Place, actionModifyIsland1.Data.IgnorePlacementBlueprintCost, actionModifyIsland1.Data.RefundDeletionBlueprintCost));
-                        }
-                        else if (action is ActionModifyBuildings actionModifyBuildings1)
-                        {
-                            return new ActionModifyBuildings(actionModifyBuildings1.Map, actionModifyBuildings1.Executor, new ModifyBuildingsPayload(actionModifyBuildings1.Data.Place), actionModifyBuildings1.UseBunchEditMode);
-                        }
-                        else
-                        {
-                            return action;
-                        }
-                    }))));
-                }
-                else
-                {
-                    MultiplayerCore.SendToAll(new PlayerActionPacket(LastActionOnUndoStack));
-                }
-            }
-            LastActionOnUndoStack = null;
-
-        }
-        public static IPlayerAction? LastActionOnRedoStack;
-        [HarmonyPatch(typeof(PlayerActionManager), "Redo")]
-        [HarmonyPrefix]
-        public static void PlayerActionManagerRedoPrefix(PlayerActionManager __instance, List<IPlayerAction> ___RedoStack)
-        {
-            if (!__instance.HasActionsOnRedoStack)
-            {
-                LastActionOnRedoStack = null;
-                return;
-            }
-            LastActionOnRedoStack = ___RedoStack[0];
-            if (___RedoStack[0] is ActionModifyIsland actionModifyIsland)
-            {
-                MultiplayerCore.SendToAll(new PlayerActionPacket(new ActionModifyIsland(actionModifyIsland.Map, actionModifyIsland.Executor, new ActionModifyIsland.Payload(actionModifyIsland.Data.Delete, actionModifyIsland.Data.IgnorePlacementBlueprintCost, actionModifyIsland.Data.RefundDeletionBlueprintCost))));
-            }
-            else if (___RedoStack[0] is ActionModifyBuildings actionModifyBuildings)
-            {
-                MultiplayerCore.SendToAll(new PlayerActionPacket(new ActionModifyBuildings(actionModifyBuildings.Map, actionModifyBuildings.Executor, new ModifyBuildingsPayload(Array.Empty<PlaceBuildingPayload>(), actionModifyBuildings.Data.Delete, actionModifyBuildings.Data.BlueprintCurrencyModification), actionModifyBuildings.UseBunchEditMode)));
-            }
-            else if (___RedoStack[0] is CombinedUndoablePlayerAction combinedUndoablePlayerAction)
-            {
-                MultiplayerCore.SendToAll(new PlayerActionPacket(new CombinedUndoablePlayerAction(combinedUndoablePlayerAction.Actions.Select(action =>
-                {
-                    if (action is ActionModifyIsland actionModifyIsland1)
-                    {
-                        return new ActionModifyIsland(actionModifyIsland1.Map, actionModifyIsland1.Executor, new ActionModifyIsland.Payload(actionModifyIsland1.Data.Delete, actionModifyIsland1.Data.IgnorePlacementBlueprintCost, actionModifyIsland1.Data.RefundDeletionBlueprintCost));
-                    }
-                    else if (action is ActionModifyBuildings actionModifyBuildings1)
-                    {
-                        return new ActionModifyBuildings(actionModifyBuildings1.Map, actionModifyBuildings1.Executor, new ModifyBuildingsPayload(Array.Empty<PlaceBuildingPayload>(), actionModifyBuildings1.Data.Delete, actionModifyBuildings1.Data.BlueprintCurrencyModification), actionModifyBuildings1.UseBunchEditMode);
-                    }
-                    else
-                    {
-                        return action;
-                    }
-                }))));
-            }
-            else
-            {
-                MultiplayerCore.SendToAll(new PlayerActionPacket(___RedoStack[0]));
-            }
-        }
-        [HarmonyPatch(typeof(PlayerActionManager), "Redo")]
-        [HarmonyPostfix]
-        public static void PlayerActionManagerRedoPostfix(List<IPlayerAction> ___RedoStack)
-        {
-            //if (LastActionOnRedoStack != null && (___RedoStack.Count == 0 || ___RedoStack[0] != LastActionOnRedoStack))
-            //{
-            //    MultiplayerCore.SendToAll(new PlayerActionPacket(LastActionOnRedoStack));
-            //}
-            if (LastActionOnRedoStack != null)
-            {
-                if (LastActionOnRedoStack is ActionModifyIsland actionModifyIsland)
-                {
-                    MultiplayerCore.SendToAll(new PlayerActionPacket(new ActionModifyIsland(actionModifyIsland.Map, actionModifyIsland.Executor, new ActionModifyIsland.Payload(actionModifyIsland.Data.Place, actionModifyIsland.Data.IgnorePlacementBlueprintCost, actionModifyIsland.Data.RefundDeletionBlueprintCost))));
-                }
-                else if (LastActionOnRedoStack is ActionModifyBuildings actionModifyBuildings)
-                {
-                    MultiplayerCore.SendToAll(new PlayerActionPacket(new ActionModifyBuildings(actionModifyBuildings.Map, actionModifyBuildings.Executor, new ModifyBuildingsPayload(actionModifyBuildings.Data.Place), actionModifyBuildings.UseBunchEditMode)));
-                }
-                else if (LastActionOnRedoStack is CombinedUndoablePlayerAction combinedUndoablePlayerAction)
-                {
-                    MultiplayerCore.SendToAll(new PlayerActionPacket(new CombinedUndoablePlayerAction(combinedUndoablePlayerAction.Actions.Select(action =>
-                    {
-                        if (action is ActionModifyIsland actionModifyIsland1)
-                        {
-                            return new ActionModifyIsland(actionModifyIsland1.Map, actionModifyIsland1.Executor, new ActionModifyIsland.Payload(actionModifyIsland1.Data.Place, actionModifyIsland1.Data.IgnorePlacementBlueprintCost, actionModifyIsland1.Data.RefundDeletionBlueprintCost));
-                        }
-                        else if (action is ActionModifyBuildings actionModifyBuildings1)
-                        {
-                            return new ActionModifyBuildings(actionModifyBuildings1.Map, actionModifyBuildings1.Executor, new ModifyBuildingsPayload(actionModifyBuildings1.Data.Place), actionModifyBuildings1.UseBunchEditMode);
-                        }
-                        else
-                        {
-                            return action;
-                        }
-                    }))));
-                }
-                else
-                {
-                    MultiplayerCore.SendToAll(new PlayerActionPacket(LastActionOnRedoStack));
-                }
-            }
-            LastActionOnRedoStack = null;
         }
         public static bool BypassSimulationSpeedCheck = false;
         [HarmonyPatch(typeof(SimulationSpeedManager), "Speed", MethodType.Setter)]
@@ -708,13 +522,24 @@ namespace Shapez2Multiplayer
                 var type = AccessTools.FirstInner(typeof(ConstantSignalBuildingModuleDataProvider), t => t.GetDeclaredFields().Any(f => f.Name == "config" && f.FieldType == typeof(ConstantSignalConfiguration)));
                 return type.FirstMethod(m => m.Name.StartsWith("<HUD_ShowConfigureDialog>"));
             }
-            public static void Postfix(ConstantSignalConfiguration ___config)
+            [HarmonyPrefix]
+            public static void Prefix(ConstantSignalConfiguration ___config, out byte[] __state)
             {
-                if (!MultiplayerCore.InLobby) return;
+                __state = null;
+                if (!CoopSession.Active) return;
+                var model = Shapez2Multiplayer.MapModel.Buildings.Cast<BuildingModel?>().FirstOrDefault(b => b.HasValue && ReferenceEquals(b.Value.Configuration, ___config));
+                if (model.HasValue) __state = PacketExtensions.Encode(new UpdateBuildingConfigurationPacket(model.Value.Tile_G, ___config));
+            }
+            [HarmonyPostfix]
+            public static void Postfix(ConstantSignalConfiguration ___config, byte[] __state)
+            {
+                if (!CoopSession.Active || __state == null) return;
                 var building = Shapez2Multiplayer.MapModel.Buildings.Cast<BuildingModel?>().FirstOrDefault(b => b.HasValue && b.Value.Configuration is ConstantSignalConfiguration constantSignalConfiguration && constantSignalConfiguration == ___config);
                 if (building.HasValue)
                 {
-                    MultiplayerCore.SendToAll(new UpdateBuildingConfigurationPacket(building.Value.Tile_G, building.Value.Configuration));
+                    var desired = PacketExtensions.Encode(new UpdateBuildingConfigurationPacket(building.Value.Tile_G, building.Value.Configuration));
+                    PacketExtensions.Decode(__state).Handle(null);
+                    CoopSession.SubmitEncoded(desired);
                 }
             }
         }

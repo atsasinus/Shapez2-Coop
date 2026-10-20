@@ -1,4 +1,4 @@
-﻿using Game.Core.Research;
+using Game.Core.Research;
 using Game.HUD.QuestArea.PinnedShapes;
 using Game.Placement.Data;
 using Shapez2Multiplayer.Packets;
@@ -34,35 +34,41 @@ namespace Shapez2Multiplayer
         }
         public static void OnResearchLinearUpgradeManagerChanged(ResearchLinearUpgradeId researchLinearUpgradeId, int level)
         {
+            if (CoopSession.Active) return;
             if (!MultiplayerCore.Hosting) throw new Exception("OnResearchLinearUpgradeManagerChanged Should Only Be Called On Host");
             MultiplayerCore.socketManager.SyncResearchTimer = 0.0f;
             MultiplayerCore.socketManager.SendToAll(new SyncResearchManagerPacket(Shapez2Multiplayer.Research));
         }
         public static void OnResearchPlayerLevelManagerChanged()
         {
+            if (CoopSession.Active) return;
             if (!MultiplayerCore.Hosting) throw new Exception("OnResearchPlayerLevelManagerChanged Should Only Be Called On Host");
             MultiplayerCore.socketManager.SyncResearchTimer = 0.0f;
             MultiplayerCore.socketManager.SendToAll(new SyncResearchManagerPacket(Shapez2Multiplayer.Research));
         }
         public static void OnResearchPlayerLevelGoalManagerChanged()
         {
+            if (CoopSession.Active) return;
             if (!MultiplayerCore.Hosting) throw new Exception("OnResearchPlayerLevelGoalManagerChanged Should Only Be Called On Host");
             MultiplayerCore.socketManager.SyncResearchTimer = 0.0f;
             MultiplayerCore.socketManager.SendToAll(new SyncResearchManagerPacket(Shapez2Multiplayer.Research));
         }
         public static void OnResearchPlayerLevelGoalManagerLeveledUpClient(PlayerLevelGoalId goalId, int level)
         {
+            if (CoopSession.Active) return;
             if (!MultiplayerCore.Client) throw new Exception("OnResearchPlayerLevelGoalManagerChanged Should Only Be Called On Client");
             MultiplayerCore.connectionManager.Send(new LevelUpPlayerLevelGoalPacket(goalId));
         }
         public static void OnResearchUnlockProgressManagerChanged()
         {
+            if (CoopSession.Active) return;
             if (!MultiplayerCore.Hosting) throw new Exception("OnResearchUnlockProgressManagerChanged Should Only Be Called On Host");
             MultiplayerCore.socketManager.SyncResearchTimer = 0.0f;
             MultiplayerCore.socketManager.SendToAll(new SyncResearchManagerPacket(Shapez2Multiplayer.Research));
         }
         public static void OnResearchUnlockManagerResearchManuallyUnlockedByPlayer(IResearchUpgrade upgrade)
         {
+            if (CoopSession.Active) return;
             if (!MultiplayerCore.Hosting) throw new Exception("OnResearchUnlockManagerResearchManuallyUnlockedByPlayer Should Only Be Called On Host");
             MultiplayerCore.socketManager.SyncResearchTimer = 0.0f;
             MultiplayerCore.socketManager.SendToAll(new SyncResearchManagerPacket(Shapez2Multiplayer.Research));

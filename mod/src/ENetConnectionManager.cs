@@ -47,6 +47,7 @@ namespace Shapez2Multiplayer
 
         public void OnMessage(ENet.Packet packet)
         {
+            if (packet.Length > 512 * 1024) { CoopSession.Fail("Oversized transport packet"); return; }
             var buffer = new byte[packet.Length];
             packet.CopyTo(buffer);
             MessageEvent(buffer);
@@ -56,7 +57,8 @@ namespace Shapez2Multiplayer
         {
             bool polled = false;
 
-            while (!polled)
+            int budget = 256;
+            while (!polled && budget-- > 0)
             {
                 if (host.CheckEvents(out Event netEvent) <= 0)
                 {

@@ -1,4 +1,4 @@
-﻿using K4os.Compression.LZ4;
+using K4os.Compression.LZ4;
 using Shapez2Multiplayer.Packets;
 using Steamworks.Data;
 using System.Collections.Generic;
@@ -35,7 +35,7 @@ namespace Shapez2Multiplayer
                 ChunkedPacket.Send(compressed, this, packet);
                 return true;
             }
-            var result = Connection.SendMessage(compressed);
+            var result = Connection.SendMessage(compressed, SendType.Reliable);
             if (result != Steamworks.Result.OK)
             {
                 Shapez2Multiplayer.logger.Warning.Log($"Failed to send steam packet with error {result}");

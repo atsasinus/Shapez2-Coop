@@ -1,4 +1,4 @@
-﻿using ENet;
+using ENet;
 using K4os.Compression.LZ4;
 using Shapez2Multiplayer.Packets;
 using System;
@@ -42,7 +42,7 @@ namespace Shapez2Multiplayer
                 return true;
             }
             ENet.Packet packet = new ENet.Packet();
-            packet.Create(compressed);
+            packet.Create(compressed, ENet.PacketFlags.Reliable);
             return Peer.Send(0, ref packet);
         }
 

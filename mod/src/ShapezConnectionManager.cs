@@ -1,4 +1,4 @@
-﻿using Core.Localization;
+using Core.Localization;
 using K4os.Compression.LZ4;
 using Shapez2Multiplayer.Packets;
 using System;
@@ -39,6 +39,7 @@ namespace Shapez2Multiplayer
         public void OnConnected()
         {
             Shapez2Multiplayer.logger.Info?.Log("Connected to host!");
+            CoopSession.ConnectedToHost();
         }
 
         public void OnDisconnected(DisconnectReason reason)
@@ -75,7 +76,7 @@ namespace Shapez2Multiplayer
         public void OnMessage(byte[] data)
         {
             var compressedLength = data.Length;
-            data = LZ4Pickler.Unpickle(data);
+            data = NetworkBoundary.Unpack(data);
 #if DEBUG
             Shapez2Multiplayer.logger.Info?.Log($"Recieved Data Of Length: {data.Length}, Compressed {compressedLength}");
 #endif
@@ -169,24 +170,9 @@ namespace Shapez2Multiplayer
                     SendToAll(new ViewportPropertyChangedPacket(viewportIslandLayer, viewportBuildingLayer, viewportShowAllBuildingLayers, viewportShowAllIslandLayers));
                 }
             }
-            if (!InSeperateThread) ConnectionManager.Update();
+            ConnectionManager.Update();
         }
-        public async Task SeperateThread()
-        {
-            InSeperateThread = true;
-            while (InSeperateThread)
-            {
-                ConnectionManager.Update();
-                await Task.Delay(1000);
-            }
-        }
-        public void StartSeperateThread()
-        {
-            Task.Run(SeperateThread);
-        }
-        public void StopSeperateThread()
-        {
-            InSeperateThread = false;
-        }
+        public void StartSeperateThread() { }
+        public void StopSeperateThread() { }
     }
 }

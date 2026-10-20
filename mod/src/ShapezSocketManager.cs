@@ -1,4 +1,4 @@
-﻿using Core.Localization;
+using Core.Localization;
 using K4os.Compression.LZ4;
 using Shapez2Multiplayer.Packets;
 using System;
@@ -14,7 +14,7 @@ namespace Shapez2Multiplayer
     {
         private List<ISocketManager> _socketManagers = new List<ISocketManager>();
         public IReadOnlyCollection<ISocketManager> SocketManagers => _socketManagers;
-        public IReadOnlyCollection<IConnection> Connected => _socketManagers.SelectMany(s => s.Connected).ToArray();
+        public IReadOnlyCollection<IConnection> Connected => _socketManagers.SelectMany(s => s.Connected).Where(CoopSession.IsAdmitted).ToArray();
         public List<IConnection> Connecting = new List<IConnection>();
         public List<Tuple<IPacket, IConnection>> BufferedRecievePackets = new List<Tuple<IPacket, IConnection>>();
         public List<IPacket> BufferedSendToAllPackets = new List<IPacket>();
@@ -28,7 +28,7 @@ namespace Shapez2Multiplayer
         public Dictionary<uint, OtherPlayerHUDIslandMassSelection> PlayersIslandMassSelections = new Dictionary<uint, OtherPlayerHUDIslandMassSelection>();
         public static readonly List<Type> AlwaysAllowedToSend = new List<Type>()
         {
-            typeof(SavegamePacket),
+            typeof(CoopPacket), typeof(SavegamePacket),
             typeof(PausePacket),
             typeof(DisconnectReasonPacket),
             typeof(UpdateConnectionInfoPacket),
@@ -38,13 +38,14 @@ namespace Shapez2Multiplayer
         };
         public static readonly List<Type> AlwaysAllowedToRecieve = new List<Type>()
         {
-            typeof(FinishedConnectingPacket),
+            typeof(CoopPacket), typeof(FinishedConnectingPacket),
             typeof(PlayerInfoPacket),
             typeof(ChunkedPacket),
             typeof(ChunkReceivedPacket)
         };
         public ShapezSocketManager(ISocketManager socketManager)
         {
+            CoopSession.StartHost();
             socketManager.ConnectedEvent += OnConnected;
             socketManager.DisconnectedEvent += OnDisconnected;
             socketManager.MessageEvent += OnMessage;
@@ -71,11 +72,12 @@ namespace Shapez2Multiplayer
                 _socketManagers.Remove(socketManager);
             }
         }
-        public void OnConnected(IConnection connection)
+        public void OnConnected(IConnection connection) { CoopSession.BeginHandshake(connection); }
+        public void Admit(IConnection connection)
         {
             Shapez2Multiplayer.logger.Info?.Log("Client connected: " + connection.UniversalId);
             HUDMultiplayerPausePanel.instance.AddPlayer(connection);
-            ChunkedPacket.ChunkedPacketCache.Add(connection.UniversalId, new Dictionary<uint, ChunkCacheData>());
+
             PlayersDrawers.Add(connection.UniversalId, Shapez2Multiplayer.CreateOtherPlayerEntityPlacementDrawer());
             PlayersBuildingMassSelections.Add(connection.UniversalId, HUDMultiplayerMassSelectionsHost.Instance.CreateOtherPlayerHUDBuildingMassSelection(connection));
             PlayersIslandMassSelections.Add(connection.UniversalId, HUDMultiplayerMassSelectionsHost.Instance.CreateOtherPlayerHUDIslandMassSelection(connection));
@@ -87,21 +89,16 @@ namespace Shapez2Multiplayer
                 SendToAllExcept(new PausePacket(true, new CombinedText("multiplayer.paused-dialog.description-waitingforplayer".T(), new RawText("\n"+string.Join(", ", Connecting.Select(c => c.Name))))), Connecting);
                 new PausePacket(true, new CombinedText("multiplayer.paused-dialog.description-waitingforplayer".T(), new RawText("\n" + string.Join(", ", Connecting.Select(c => c.Name))))).Handle(null);
             }
-            Shapez2Multiplayer.YetToRecieveSavegame.Add(connection);
-            if (Shapez2Multiplayer.YetToRecieveSavegame.Count == 1) Shapez2Multiplayer.GameSessionOrchestrator.TrySaveCurrentAsync();
+            SendTo(new SavegamePacket(CoopSimulation.Capture(), Shapez2Multiplayer.SavegameOptionsManager.Uid), connection);
         }
 
         public void OnDisconnected(IConnection connection)
         {
+            if (!CoopSession.IsAdmitted(connection)) { CoopSession.Remove(connection); return; }
+            CoopSession.Remove(connection);
             Shapez2Multiplayer.logger.Info?.Log("Client disconnected: " + connection.UniversalId);
             HUDMultiplayerPausePanel.instance.RemovePlayer(connection);
-            ChunkedPacket.ChunkedPacketCache.Remove(connection.UniversalId);
-            ChunkedPacket.ToSend.RemoveAll(c => c.Item2 == connection);
-            if (ChunkedPacket.WaitingFromId.HasValue && ChunkedPacket.WaitingFromId.Value == connection.UniversalId)
-            {
-                ChunkedPacket.WaitingFromId = null;
-                if (ChunkedPacket.ToSend.Count > 0) ChunkedPacket.SendOne();
-            }
+            ChunkedPacket.Remove(connection);
             PlayersDrawers.Remove(connection.UniversalId);
             PlayersBuildingMassSelections.Remove(connection.UniversalId);
             PlayersIslandMassSelections.Remove(connection.UniversalId);
@@ -129,20 +126,22 @@ namespace Shapez2Multiplayer
 
         public void OnMessage(IConnection connection, byte[] data)
         {
-            var compressedLength = data.Length;
-            data = LZ4Pickler.Unpickle(data);
-#if DEBUG
-            Shapez2Multiplayer.logger.Info?.Log($"Recieved Data Of Length: {data.Length}, Compressed {compressedLength}");
-#endif
-            var packet = PacketExtensions.Decode(data);
-            if (Connecting.Count > 0 && !AlwaysAllowedToRecieve.Contains(packet.GetType()))
+            try
             {
-                BufferedRecievePackets.Add(new Tuple<IPacket, IConnection>(packet, connection));
-                return;
+                var decoded = NetworkBoundary.Unpack(data);
+                var tag = PacketExtensions.PacketFromData(decoded);
+                NetworkBoundary.ValidateClientTag(tag, connection);
+                var packet = PacketExtensions.Decode(decoded, out var from);
+                if (from.HasValue) throw new System.IO.InvalidDataException("Forged sender");
+                if (Connecting.Count > 0 && !AlwaysAllowedToRecieve.Contains(packet.GetType())) return;
+                packet.Handle(connection);
             }
-            packet.Handle(connection);
-        }
-        public bool SendToAll(IPacket packet)
+            catch (Exception ex)
+            {
+                Shapez2Multiplayer.logger.Warning?.Log("Rejected peer packet: " + ex.Message);
+                connection.Close();
+            }
+        }        public bool SendToAll(IPacket packet)
         {
             if (Connecting.Count > 0 && !AlwaysAllowedToSend.Contains(packet.GetType()))
             {
@@ -156,7 +155,7 @@ namespace Shapez2Multiplayer
             bool success = true;
             foreach (var connection in Connected)
             {
-                success = success && connection.Send(encoded, type);
+                success = connection.Send(encoded, type) && success;
             }
             return success;
         }
@@ -298,7 +297,7 @@ namespace Shapez2Multiplayer
                 SendToAll(new UpdateConnectionInfoPacket(Connected.Select(c => new InfoConnection(c)).ToList(), new List<uint>()));
             }
             SyncResearchTimer += Time.deltaTime;
-            if (SyncResearchTimer >= SYNC_RESEARCH_TIME)
+            if (!CoopSession.Active && SyncResearchTimer >= SYNC_RESEARCH_TIME)
             {
                 SyncResearchTimer = 0.0f;
                 SendToAll(new SyncResearchManagerPacket(Shapez2Multiplayer.Research));

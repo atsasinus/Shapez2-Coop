@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Text;
 
@@ -28,13 +28,14 @@ namespace Shapez2Multiplayer.Packets
         PlayerInteractionStateChanged,
         UpdateBuildingConfiguration,
         UpdateWaypoint,
-        DeleteWaypoint
+        DeleteWaypoint, Coop
     }
     public static class PacketExtensions
     {
         public static Type GetType(this Packet packet) =>
             packet switch
             {
+                Packet.Coop => typeof(CoopPacket),
                 Packet.Savegame => typeof(SavegamePacket),
                 Packet.PlayerAction => typeof(PlayerActionPacket),
                 Packet.SendToAll => typeof(SendToAllPacket),
@@ -62,6 +63,7 @@ namespace Shapez2Multiplayer.Packets
             };
         public static Packet GetFromType(Type type)
         {
+            if (type == typeof(CoopPacket)) return Packet.Coop;
             if (type == typeof(SavegamePacket)) return Packet.Savegame;
             else if (type == typeof(PlayerActionPacket)) return Packet.PlayerAction;
             else if (type == typeof(SendToAllPacket)) return Packet.SendToAll;
@@ -98,6 +100,13 @@ namespace Shapez2Multiplayer.Packets
             return stream.ToArray();
         }
         public static IPacket Decode(byte[] data, out uint? from)
+        {
+            if (++DecodeDepth > 8) { --DecodeDepth; throw new InvalidDataException("Packet nesting limit"); }
+            try { return DecodeCore(data, out from); }
+            finally { --DecodeDepth; }
+        }
+        [ThreadStatic] private static int DecodeDepth;
+        private static IPacket DecodeCore(byte[] data, out uint? from)
         {
             using var stream = new MemoryStream(data);
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, true);

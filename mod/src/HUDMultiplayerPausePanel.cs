@@ -14,6 +14,7 @@ namespace Shapez2Multiplayer
     {
         public static HUDMultiplayerPausePanel? instance;
         public static List<HUDPlayerEntry> Entries = new List<HUDPlayerEntry>();
+        private TextMeshProUGUI SessionStatus;
         [Construct]
         private void Construct(IDependencyResolver DependencyResolver)
         {
@@ -29,6 +30,13 @@ namespace Shapez2Multiplayer
             UIScrollContainer = transform.GetChild(4).GetComponent<HUDScrollContainer>();
             ScrollRect = UIScrollContainer.GetComponent<ScrollRect>();
             instance = this;
+            SessionStatus = UIFactory.AddTextPrimary(transform);
+            SessionStatus.fontSize = 16;
+            var statusRect = SessionStatus.rectTransform;
+            statusRect.anchorMin = new Vector2(0, 1);
+            statusRect.anchorMax = new Vector2(1, 1);
+            statusRect.offsetMin = new Vector2(12, 5);
+            statusRect.offsetMax = new Vector2(-12, 65);
             if (MultiplayerCore.Client)
             {
                 foreach (var connection in MultiplayerCore.connectionManager.Connections)
@@ -118,6 +126,7 @@ namespace Shapez2Multiplayer
         }
         public override void OnUpdate(InputDownstreamContext context)
         {
+            if (SessionStatus != null) SessionStatus.text = "Co-op alpha | " + CoopSession.Status;
             HostButton.Interactable = !MultiplayerCore.InLobby || MultiplayerCore.Hosting;
             HostButton.Text = MultiplayerCore.InLobby && !MultiplayerCore.Hosting ? "multiplayer.inlobby".T() : MultiplayerCore.Hosting ? "multiplayer.stophosting".T() : "multiplayer.host".T();
             InviteButton.Interactable = MultiplayerCore.Hosting;
@@ -130,7 +139,7 @@ namespace Shapez2Multiplayer
                 MultiplayerCore.Disconnect();
             } else
             {
-                MultiplayerCore.CreateLobby();
+                MultiplayerCore.CreateLobby(steam: SteamClient.IsValid, ENet: true);
             }
         }
         private HUDButton HostButton;

@@ -4,7 +4,7 @@ This derivative of [Bknibb/Shapez2Multiplayer](https://github.com/Bknibb/Shapez2
 
 Architecture references: [shapez2-shifter](https://github.com/tobspr-games/shapez2-shifter), MIT, inspected at `8a9fa01472c8554d77a3b8d0c0974a1867445f04`; [coop-anything](https://github.com/cranebeaker/coop-anything), MIT. No Shifter implementation is copied into this mod.
 
-Runtime dependencies: HarmonyX 2.16.1 (LGPL-2.1), K4os.Compression.LZ4 1.3.8 and K4os.Hash.xxHash 1.0.8 (MIT), ENet-CSharp and native ENet (MIT, binaries retained from upstream), System.Runtime.CompilerServices.Unsafe 6.0.0 (MIT). Exact dependency graph is recorded in packages.lock.json. Redistributed dependency licenses accompany packages.
+Runtime dependencies: HarmonyX 2.16.1 (MIT), K4os.Compression.LZ4 1.3.8 and K4os.Hash.xxHash 1.0.8 (MIT), ENet-CSharp and native ENet (MIT, binaries retained from upstream), System.Runtime.CompilerServices.Unsafe 6.0.0 (MIT). Exact dependency graph is recorded in packages.lock.json. Packaging remains gated on collecting the ENet and K4os copyright/license notices. The managed ENet binary identifies commit `5cb7b630e59540ee4e453c63eaed15a6217613cd`; the native binary revision is not yet established.
 
 Shapez2UILib and Steamworks Platform Resolver are external Workshop dependencies. Shapez2UILib's public source is used locally for compilation only; no license was found in its repository, so its source and DLL are not redistributed here. Game and Unity assemblies are read-only references and are never redistributed.
 

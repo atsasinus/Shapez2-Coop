@@ -5,3 +5,19 @@ local/
 dist/
 *.user
 *.suo
+# Сторонние репозитории
+/references/
+
+# Результаты сборки
+**/bin/
+**/obj/
+**/.vs/
+*.dll
+*.exe
+*.pdb
+*.zip
+*.7z
+
+# Временные файлы
+*.log
+*.tmp

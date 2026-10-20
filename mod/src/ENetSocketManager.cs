@@ -47,6 +47,7 @@ namespace Shapez2Multiplayer
 
         public void OnMessage(Peer peer, Packet packet)
         {
+            if (packet.Length > 512 * 1024) { peer.Disconnect(0); return; }
             var buffer = new byte[packet.Length];
             packet.CopyTo(buffer);
             MessageEvent(_ENetConnections[peer.ID], buffer);
@@ -56,7 +57,8 @@ namespace Shapez2Multiplayer
         {
             bool polled = false;
 
-            while (!polled)
+            int budget = 256;
+            while (!polled && budget-- > 0)
             {
                 if (host.CheckEvents(out Event netEvent) <= 0)
                 {

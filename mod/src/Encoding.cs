@@ -1,4 +1,4 @@
-﻿using Core.Collections;
+using Core.Collections;
 using Core.Collections.Scoped;
 using Core.Localization;
 using Game.Core.Blueprint;
@@ -76,6 +76,7 @@ namespace Shapez2Multiplayer
         //    { typeof(NotchDefinition), stream => DecodeNotchDefinition(stream) },
         //    { typeof(GridRotation), stream => DecodeGridRotation(stream) }
         //};
+        public static int ReadCount(BinaryReader reader) { int count = reader.ReadInt32(); if (count < 0 || count > 65536 || count > reader.BaseStream.Length - reader.BaseStream.Position) throw new InvalidDataException("Invalid collection length"); return count; }
         public static readonly Dictionary<GlobalTileCoordinate, BuildingId> DeletedBuildingIds = new Dictionary<GlobalTileCoordinate, BuildingId>();
         public static readonly Dictionary<GlobalChunkCoordinate, IslandId> DeletedIslandIds = new Dictionary<GlobalChunkCoordinate, IslandId>();
         public static ISerializationVisitor serializationVisitor;
@@ -232,7 +233,7 @@ namespace Shapez2Multiplayer
             if (reader.ReadBoolean()) hudBuildingMassSelection.AreaSelectionStart_G = DecodeGlobalTileCoordinate(stream);
             hudBuildingMassSelection.CurrentMode = DecodeHUDMassSelectionMode(stream);
             var pendingSelection = hudBuildingMassSelection.PendingSelection;
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 if (Shapez2Multiplayer.MapModel.TryGetBuilding(DecodeGlobalTileCoordinate(stream), out BuildingModel building))
@@ -306,7 +307,7 @@ namespace Shapez2Multiplayer
             if (reader.ReadBoolean()) hudIslandMassSelection.AreaSelectionStart_G = DecodeGlobalChunkCoordinate(stream);
             hudIslandMassSelection.CurrentMode = DecodeHUDMassSelectionMode(stream);
             var pendingSelection = hudIslandMassSelection.PendingSelection;
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 if (Shapez2Multiplayer.MapModel.TryGetIsland(DecodeGlobalChunkCoordinate(stream), out IslandModel island))
@@ -460,8 +461,7 @@ namespace Shapez2Multiplayer
                 case PlacementInputType.VariablePairPlacementInputChunk:
                     return DecodeVariablePairPlacementInputChunk(stream);
                 default:
-                    Shapez2Multiplayer.logger.Error.Log("Tried to decode unknown player action");
-                    return null;
+                    throw new InvalidDataException("Unknown player action tag");
             }
         }
         public static void Encode(AreaPlacementInput<GlobalTileTransform, GlobalTileCoordinate> areaPlacementInput, Stream stream)
@@ -721,7 +721,7 @@ namespace Shapez2Multiplayer
             pathPlacementInput.Cancelled = cancelled;
             pathPlacementInput.StartedDragging = startedDragging;
             pathPlacementInput.UseForce = useForce;
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 pathPlacementInput.SegmentsStack.Push(DecodePathPlacementInputSegmentTile(stream));
@@ -755,7 +755,7 @@ namespace Shapez2Multiplayer
             pathPlacementInput.Cancelled = cancelled;
             pathPlacementInput.StartedDragging = startedDragging;
             pathPlacementInput.UseForce = useForce;
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 pathPlacementInput.SegmentsStack.Push(DecodePathPlacementInputSegmentChunk(stream));
@@ -1003,7 +1003,7 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var serializedData = new ResearchUnlockProgressManager.SerializedData();
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 serializedData.UnlockedUpgradeIds.Add(reader.ReadString());
@@ -1024,7 +1024,7 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var serializedData = new ResearchShapeStorage.SerializedData();
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 serializedData.StoredShapes.Add(reader.ReadString(), reader.ReadInt32());
@@ -1071,7 +1071,7 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var serializedData = new ResearchLinearUpgradeManager.SerializedData();
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 serializedData.UpgradeLevels.Add(reader.ReadString(), reader.ReadInt32());
@@ -1104,7 +1104,7 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var serializedData = new ResearchPlayerLevelGoalManager.SerializedData();
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 serializedData.GoalLevels.Add(reader.ReadString(), reader.ReadInt32());
@@ -1159,7 +1159,7 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var contents = new List<IText>();
-            var length = reader.ReadInt32();
+            var length = ReadCount(reader);
             for (int i = 0; i < length; i++)
             {
                 contents.Add(DecodeText(stream));
@@ -1242,10 +1242,17 @@ namespace Shapez2Multiplayer
             }
             else
             {
-                Shapez2Multiplayer.logger.Error.Log($"Unknown player action type: {playerAction.GetType().Name}");
+                throw new InvalidDataException("Unsupported player action");
             }
         }
         public static IPlayerAction? DecodePlayerAction(Stream stream)
+        {
+            if (++ActionDecodeDepth > 32) { --ActionDecodeDepth; throw new InvalidDataException("Action nesting limit"); }
+            try { return DecodePlayerActionCore(stream); }
+            finally { --ActionDecodeDepth; }
+        }
+        [ThreadStatic] private static int ActionDecodeDepth;
+        private static IPlayerAction? DecodePlayerActionCore(Stream stream)
         {
             switch ((PlayerActionType)stream.ReadByte())
             {
@@ -1264,8 +1271,7 @@ namespace Shapez2Multiplayer
                 case PlayerActionType.ClearIslandContent:
                     return DecodeClearIslandContentPlayerAction(stream);
                 default:
-                    Shapez2Multiplayer.logger.Error.Log("Tried to decode unknown player action");
-                    return null;
+                    throw new InvalidDataException("Unknown player action tag");
             }
         }
         enum PlayerActionType : byte
@@ -1316,7 +1322,7 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var Actions = new List<IPlayerAction>();
-            var length = reader.ReadInt32();
+            var length = ReadCount(reader);
             for (int i = 0; i < length; i++)
             {
                 var action = DecodePlayerAction(stream);
@@ -1341,7 +1347,7 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var IslandsToClear = new List<IslandId>();
-            int length = reader.ReadInt32();
+            int length = ReadCount(reader);
             for (int i = 0; i < length; i++)
             {
                 if (Shapez2Multiplayer.MapModel.TryGetIsland(DecodeGlobalChunkCoordinate(stream), out var island))
@@ -1368,7 +1374,7 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var BuildingsToClear = new List<BuildingId>();
-            int length = reader.ReadInt32();
+            int length = ReadCount(reader);
             for (int i = 0; i < length; i++)
             {
                 if (Shapez2Multiplayer.MapModel.TryGetBuilding(DecodeGlobalTileCoordinate(stream), out var building))
@@ -1410,13 +1416,13 @@ namespace Shapez2Multiplayer
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var ignorePlacementBlueprintCost = reader.ReadBoolean();
             var refundDeletionBlueprintCost = reader.ReadBoolean();
-            var place = new ActionModifyIsland.PlacePayload[reader.ReadInt32()];
+            var place = new ActionModifyIsland.PlacePayload[ReadCount(reader)];
             for (int i = 0; i < place.Length; i++)
             {
                 place[i] = DecodeActionModifyIslandPlacePayload(stream); ;
             }
             var delete = new List<ActionModifyIsland.DeletePayload>();
-            int length = reader.ReadInt32();
+            int length = ReadCount(reader);
             for (int i = 0; i < length; i++)
             {
                 var payload = DecodeActionModifyIslandDeletePayload(stream);
@@ -1507,7 +1513,7 @@ namespace Shapez2Multiplayer
             
             var Origin_GC = DecodeGlobalChunkCoordinate(stream);
             var rotation = DecodeGridRotation(stream);
-            var placeBuildings = new PlaceBuildingPayload[reader.ReadInt32()];
+            var placeBuildings = new PlaceBuildingPayload[ReadCount(reader)];
             for (int i = 0; i < placeBuildings.Length; i++)
             {
                 placeBuildings[i] = DecodePlaceBuildingPayload(stream);
@@ -1547,13 +1553,13 @@ namespace Shapez2Multiplayer
         public static ModifyBuildingsPayload DecodeModifyBuildingsPayload(Stream stream)
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
-            var place = new PlaceBuildingPayload[reader.ReadInt32()];
+            var place = new PlaceBuildingPayload[ReadCount(reader)];
             for (int i = 0; i < place.Length; i++)
             {
                 place[i] = DecodePlaceBuildingPayload(stream);
             }
             var delete = new List<DeleteBuildingPayload>();
-            int length = reader.ReadInt32();
+            int length = ReadCount(reader);
             for (int i = 0; i < length; i++)
             {
                 var payload = DecodeDeleteBuildingPayload(stream);
@@ -1571,14 +1577,14 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var Coordinate = DecodeGlobalTileCoordinate(stream);
+            var forceAllowDelete = reader.ReadBoolean();
             if (!Shapez2Multiplayer.MapModel.TryGetBuilding(Coordinate, out var building))
             {
-                Shapez2Multiplayer.logger.Warning.Log("Building not found for DeleteBuildingPayload, likely desync");
-                return null;
+                throw new InvalidDataException("Delete target no longer exists");
             }
             var Id = building.Id;
             DeletedBuildingIds[Coordinate] = Id;
-            return new DeleteBuildingPayload(Id, reader.ReadBoolean());
+            return new DeleteBuildingPayload(Id, forceAllowDelete);
         }
         public static void Encode(PlaceBuildingPayload placeBuildingPayload, Stream stream)
         {
@@ -1661,7 +1667,7 @@ namespace Shapez2Multiplayer
                 }
             }
             byte[] serializedState = null;
-            if (reader.ReadBoolean()) serializedState = reader.ReadBytes(reader.ReadInt32());
+            if (reader.ReadBoolean()) serializedState = reader.ReadBytes(ReadCount(reader));
             var additionalDataSavegameVersion = (GameVersion)reader.ReadInt32();
             var forceAllowPlace = reader.ReadBoolean();
             var transform_I = DecodeIslandTileTransform(stream);
@@ -1785,7 +1791,7 @@ namespace Shapez2Multiplayer
             concurrentPlacementData.IslandsCount = reader.ReadInt32();
             concurrentPlacementData.BuildingsCount = reader.ReadInt32();
             var _ExtraBuildingsToRemovePositions = concurrentPlacementData.ExtraBuildingsToRemovePositions;
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 _ExtraBuildingsToRemovePositions.Add(DecodeGlobalTileCoordinate(stream));
@@ -1872,7 +1878,7 @@ namespace Shapez2Multiplayer
             flatPlacementData.CanAffordBlueprintCost = reader.ReadBoolean();
             flatPlacementData.CanFitChunkLimit = reader.ReadBoolean();
             var _ExtraBuildingsToRemovePositions = flatPlacementData.ExtraBuildingsToRemovePositions;
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 _ExtraBuildingsToRemovePositions.Add(DecodeGlobalTileCoordinate(stream));
@@ -1969,7 +1975,7 @@ namespace Shapez2Multiplayer
             overlappingPlacementData.CanAffordBlueprintCost = reader.ReadBoolean();
             overlappingPlacementData.CanFitChunkLimit = reader.ReadBoolean();
             var _ExtraBuildingsToRemovePositions = overlappingPlacementData._ExtraBuildingsToRemovePositions;
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 _ExtraBuildingsToRemovePositions.Add(DecodeGlobalTileCoordinate(stream));
@@ -1985,7 +1991,7 @@ namespace Shapez2Multiplayer
             for (int i = 0; i < count; i++)
             {
                 var key = DecodeGlobalChunkCoordinate(stream);
-                var count2 = reader.ReadInt32();
+                var count2 = ReadCount(reader);
                 for (int v = 0; v < count2; v++)
                 {
                     _IslandsMap.AddValue(key, DecodeIslandPlacement(stream));
@@ -1996,7 +2002,7 @@ namespace Shapez2Multiplayer
             for (int i = 0; i < count; i++)
             {
                 var key = DecodeGlobalTileCoordinate(stream);
-                var count2 = reader.ReadInt32();
+                var count2 = ReadCount(reader);
                 for (int v = 0; v < count2; v++)
                 {
                     _BuildingsMap.AddValue(key, DecodeBuildingPlacement(stream));
@@ -2319,7 +2325,7 @@ namespace Shapez2Multiplayer
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var id = DecodeIslandDefinitionId(stream);
             //var layoutData = new List<KeyValuePair<ChunkVector, IslandChunkData>>();
-            //var count = reader.ReadInt32();
+            //var count = ReadCount(reader);
             //for (int i = 0; i < count; i++)
             //{
             //    layoutData.Add(new KeyValuePair<ChunkVector, IslandChunkData>((ChunkVector)bf.Deserialize(stream), DecodeIslandChunkData(stream)));
@@ -2378,14 +2384,14 @@ namespace Shapez2Multiplayer
         //public static BuildingConnectorData DecodeBuildingConnectorData(Stream stream)
         //{
         //    using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
-        //    var count = reader.ReadInt32();
-        //    //var allInputs = new IBuildingIO[reader.ReadInt32()];
+        //    var count = ReadCount(reader);
+        //    //var allInputs = new IBuildingIO[ReadCount(reader)];
         //    var allInputs = new IBuildingIO[count];
         //    for (int i = 0; i < allInputs.Length; i++)
         //    {
         //        allInputs[i] = (IBuildingIO)bf.Deserialize(stream);
         //    }
-        //    var tiles = new TileVector[reader.ReadInt32()];
+        //    var tiles = new TileVector[ReadCount(reader)];
         //    for (int i = 0; i < tiles.Length; i++)
         //    {
         //        tiles[i] = (TileVector)bf.Deserialize(stream);
@@ -2494,12 +2500,12 @@ namespace Shapez2Multiplayer
         {
             using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
             var tile_IC = DecodeChunkVector(stream);
-            var notches = new ChunkDirection[reader.ReadInt32()];
+            var notches = new ChunkDirection[ReadCount(reader)];
             for (int i = 0; i < notches.Length; i++)
             {
                 notches[i] = DecodeChunkDirection(stream);
             }
-            var tileNotchFlags_L = new ChunkDirection?[reader.ReadInt32()];
+            var tileNotchFlags_L = new ChunkDirection?[ReadCount(reader)];
             for (int i = 0; i < tileNotchFlags_L.Length; i++)
             {
                 if (reader.ReadBoolean())
@@ -2512,18 +2518,18 @@ namespace Shapez2Multiplayer
                 }
             }
             var isBuildable = reader.ReadBoolean();
-            var tileBuildableFlags_L = new bool[reader.ReadInt32()];
+            var tileBuildableFlags_L = new bool[ReadCount(reader)];
             for (int i = 0; i < tileBuildableFlags_L.Length; i++)
             {
                 tileBuildableFlags_L[i] = reader.ReadBoolean();
             }
-            var edgeTypes = new ChunkEdgeType[reader.ReadInt32()];
+            var edgeTypes = new ChunkEdgeType[ReadCount(reader)];
             for (int i = 0; i < edgeTypes.Length; i++)
             {
                 edgeTypes[i] = (ChunkEdgeType)stream.ReadByte();
             }
             var islandChunkData = new IslandChunkData(tile_IC, notches, tileNotchFlags_L, isBuildable, tileBuildableFlags_L, edgeTypes);
-            var count = reader.ReadInt32();
+            var count = ReadCount(reader);
             for (int i = 0; i < count; i++)
             {
                 islandChunkData.TileVoidFlags_L[i] = reader.ReadBoolean();
@@ -2558,7 +2564,7 @@ namespace Shapez2Multiplayer
         public static NotchDefinition DecodeNotchDefinition(Stream stream)
         {
             //using BinaryReader reader = new BinaryReader(stream, UTF8Encoding.UTF8, leaveOpen: true);
-            //var notchTiles = new ChunkTileCoordinate[reader.ReadInt32()];
+            //var notchTiles = new ChunkTileCoordinate[ReadCount(reader)];
             //for (int i = 0; i < notchTiles.Length; i++)
             //{
             //    notchTiles = (ChunkTileCoordinate)bf.Deserialize(stream);

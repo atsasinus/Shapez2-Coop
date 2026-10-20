@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 
 namespace Shapez2Multiplayer.Packets
 {
@@ -17,11 +17,7 @@ namespace Shapez2Multiplayer.Packets
 
         public void Handle(IConnection? connection, InfoConnection? routedFrom = null)
         {
-            if (connection == null || (ChunkedPacket.WaitingFromId.HasValue && ChunkedPacket.WaitingFromId.Value == connection.UniversalId))
-            {
-                ChunkedPacket.WaitingFromId = null;
-                ChunkedPacket.SendOne();
-            }
+            throw new InvalidDataException("Legacy ACK rejected");
         }
     }
 }

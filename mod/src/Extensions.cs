@@ -31,10 +31,10 @@ namespace Shapez2Multiplayer
         }
         public static bool TryScheduleActionNoDetection(this PlayerActionManager playerActionManager, IPlayerAction action)
         {
+            var previous = Shapez2Multiplayer.ActionDetection;
             Shapez2Multiplayer.ActionDetection = false;
-            var result = playerActionManager.TryScheduleAction(action);
-            Shapez2Multiplayer.ActionDetection = true;
-            return result;
+            try { return playerActionManager.TryScheduleAction(action); }
+            finally { Shapez2Multiplayer.ActionDetection = previous; }
         }
         public static string GetGenericFriendlyName(this Type type)
         {

@@ -14,3 +14,8 @@ $uiOutput = Join-Path $root 'local/build/uilib'
 if ($LASTEXITCODE -ne 0) { throw 'UI dependency build failed' }
 & $dotnet build (Join-Path $root 'mod/src/Shapez2Multiplayer.csproj') -c Release "-p:SPZ2_PATH=$managed" "-p:UiLibPath=$uiOutput/Shapez2UILib.dll" --nologo -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'Mod build failed' }
+$inputs = @(& (Join-Path $PSScriptRoot 'build-inputs.ps1') -Root $root)
+$output = Join-Path $root 'mod/src/bin/Release'
+@{ sources=$inputs; moduleSha256=(Get-FileHash (Join-Path $output 'Shapez2Multiplayer.dll')).Hash;
+    protocolSha256=(Get-FileHash (Join-Path $output 'Shapez2Coop.Protocol.dll')).Hash } |
+    ConvertTo-Json -Depth 5 | Set-Content (Join-Path $output 'build-inputs.json')

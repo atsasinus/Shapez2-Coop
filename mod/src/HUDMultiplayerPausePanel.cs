@@ -30,14 +30,11 @@ namespace Shapez2Multiplayer
             //HostButton.transform.GetChild(0).GetComponent<Image>().sprite = Shapez2Multiplayer.HUDButtonBase;
             UIScrollContainer = transform.GetChild(4).GetComponent<HUDScrollContainer>();
             ScrollRect = UIScrollContainer.GetComponent<ScrollRect>();
-            UIScrollContainer.GetComponent<RectTransform>().offsetMin = new Vector2(0, 250);
-            RateButton = UIFactory.AddButton(transform, this, secondary: true);
-            RateButton.name = "SimulationFrequency";
-            ConfigureSettingButton(RateButton, 0, 0.5f);
+            // These controls must be created before this component's Construct:
+            // adding an unconstructed child here breaks HUDLocalizedText updates.
+            RateButton = transform.Find("SimulationFrequency").GetComponent<HUDButton>();
             RateButton.OnClick.AddListener(CycleRate);
-            PredictionButton = UIFactory.AddButton(transform, this, secondary: true);
-            PredictionButton.name = "VisualPrediction";
-            ConfigureSettingButton(PredictionButton, 0.5f, 1);
+            PredictionButton = transform.Find("VisualPrediction").GetComponent<HUDButton>();
             PredictionButton.OnClick.AddListener(TogglePrediction);
             instance = this;
             SessionStatus = UIFactory.AddTextPrimary(transform);
@@ -45,8 +42,9 @@ namespace Shapez2Multiplayer
             var statusRect = SessionStatus.rectTransform;
             statusRect.anchorMin = new Vector2(0, 1);
             statusRect.anchorMax = new Vector2(1, 1);
-            statusRect.offsetMin = new Vector2(12, 5);
-            statusRect.offsetMax = new Vector2(-12, 65);
+            statusRect.offsetMin = new Vector2(16, -66);
+            statusRect.offsetMax = new Vector2(-16, -12);
+            SessionStatus.enableWordWrapping = true;
             if (MultiplayerCore.Client)
             {
                 foreach (var connection in MultiplayerCore.connectionManager.Connections)
@@ -157,12 +155,6 @@ namespace Shapez2Multiplayer
             {
                 MultiplayerCore.CreateLobby(steam: SteamClient.IsValid, ENet: true);
             }
-        }
-        private void ConfigureSettingButton(HUDButton button, float left, float right)
-        {
-            var rect = button.GetComponent<RectTransform>();
-            rect.anchorMin = new Vector2(left, 0); rect.anchorMax = new Vector2(right, 0);
-            rect.offsetMin = new Vector2(20, 180); rect.offsetMax = new Vector2(-20, 230);
         }
         private void CycleRate()
         {

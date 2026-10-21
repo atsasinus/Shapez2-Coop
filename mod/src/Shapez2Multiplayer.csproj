@@ -236,6 +236,7 @@
 <ItemGroup Condition="'$(CoopQa)' == 'true'"><Compile Include="../qa/*.cs" /></ItemGroup>
 <ItemGroup Condition="'$(CoopQa)' == 'true'">
   <Reference Include="Unity.InputSystem"><HintPath>$(SPZ2_PATH)\Unity.InputSystem.dll</HintPath><Private>False</Private></Reference>
+  <Reference Include="UnityEngine.ScreenCaptureModule"><HintPath>$(SPZ2_PATH)\UnityEngine.ScreenCaptureModule.dll</HintPath><Private>False</Private></Reference>
 </ItemGroup>
 </Project>
 

@@ -330,6 +330,8 @@ namespace Shapez2Multiplayer
         }
         public static async Task<Lobby[]?> FindFriendLobbies()
         {
+            // Direct IP play does not require an initialized Steam friends API.
+            if (!SteamClient.IsValid) return Array.Empty<Lobby>();
             try
             {
                 //return await SteamMatchmaking.LobbyList.RequestAsync() ?? new Steamworks.Data.Lobby[0];

@@ -93,7 +93,9 @@ namespace Shapez2Multiplayer
             GameOrchestrator = GameBootstrapper.GameOrchestrator;
             Game = GameOrchestrator.Game;
             Application.quitting += Quitting;
-            MainMenuUIRegistrar.RegisterUI<HUDMenuMultiplayerState>(BuildMultiplayerUI, "Multiplayer", MultiplayerButtonTranslation, MultiplayerButtonTranslationId, "menu.play.title", addMainPanel: false);
+            // UILib builds the view; our RebuildMenuButtons patch inserts its entry
+            // for both New Game and Play menus without depending on a translation ID.
+            MainMenuUIRegistrar.RegisterUI<HUDMenuMultiplayerState>(BuildMultiplayerUI, "Multiplayer", MultiplayerButtonTranslation, MultiplayerButtonTranslationId, "coop.menu-entry-managed", addMainPanel: false);
             UIHook.ElementHookUI<HUDMultiplayerPausePanel, HUDPauseMenu>(BuildMultiplayerPauseUI, "Multiplayer Pause Panel");
         }
 
@@ -233,7 +235,20 @@ namespace Shapez2Multiplayer
             UIFactory.AddDivider(hudScrollContainer.transform, false).name = "Divider Top";
             UIFactory.AddDivider(hudScrollContainer.transform, true).name = "Divider Bottom";
             RectTransform UIScrollContainerTransform = hudScrollContainer.GetComponent<RectTransform>();
-            UIScrollContainerTransform.offsetMin = new Vector2(0, 180);
+            // Build every HUD child before dependency construction walks the list.
+            // Full-width setting rows also fit small windows without clipping labels.
+            UIScrollContainerTransform.offsetMin = new Vector2(0, 294);
+            UIScrollContainerTransform.offsetMax = new Vector2(0, -78);
+            var rate = UIFactory.AddButton(hudMultiplayerPausePanel.transform, hudMultiplayerPausePanel, secondary: true);
+            rate.name = "SimulationFrequency";
+            var rateRect = rate.GetComponent<RectTransform>();
+            rateRect.anchorMin = new Vector2(0, 0); rateRect.anchorMax = new Vector2(1, 0);
+            rateRect.offsetMin = new Vector2(20, 234); rateRect.offsetMax = new Vector2(-20, 282);
+            var prediction = UIFactory.AddButton(hudMultiplayerPausePanel.transform, hudMultiplayerPausePanel, secondary: true);
+            prediction.name = "VisualPrediction";
+            var predictionRect = prediction.GetComponent<RectTransform>();
+            predictionRect.anchorMin = new Vector2(0, 0); predictionRect.anchorMax = new Vector2(1, 0);
+            predictionRect.offsetMin = new Vector2(20, 174); predictionRect.offsetMax = new Vector2(-20, 222);
         }
         public static readonly string MultiplayerButtonTranslationId = "menu.multiplayer.title";
         public static readonly IText MultiplayerButtonTranslation = MultiplayerButtonTranslationId.T();

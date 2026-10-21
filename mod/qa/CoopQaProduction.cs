@@ -15,6 +15,9 @@ namespace Shapez2Multiplayer
         public static void Seed()
         {
             var game = Shapez2Multiplayer.GameSessionOrchestrator;
+            // LoadSession can finish while the newly displayed world has a calculation
+            // in flight. Map edits must follow the same barrier as runtime intents.
+            game.FinalizeLogicUpdate();
             var mode = Shapez2Multiplayer.Mode;
             var shapeHash = string.Concat(Enumerable.Repeat(
                 $"{mode.ShapesConfiguration.Parts.First().Code}{mode.ShapeColorScheme.Colors.First().Code}",

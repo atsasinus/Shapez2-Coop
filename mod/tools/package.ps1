@@ -53,6 +53,7 @@ Copy-Item -LiteralPath (Join-Path $build 'build-inputs.json') -Destination $modF
 $files = & git -c "safe.directory=$root" -C $root ls-files -- mod AGENTS.md
 if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate source' }
 foreach ($relative in $files) {
+    if ($relative -in @('mod/src/ENet-CSharp.dll','mod/src/enet.dll')) { continue }
     if ($relative -notmatch '^(mod/|AGENTS\.md$)' -or $relative -match '(^|/)(bin|obj|local|references)/' -or
         ([IO.Path]::GetExtension($relative) -notin @('.cs','.csproj','.json','.ps1','.md','.txt',''))) {
         throw "Unexpected source archive entry: $relative"

@@ -19,9 +19,10 @@ namespace Shapez2Multiplayer
             public bool Admitted;
             public bool WaitingSnapshot;
             public ulong LastRequest;
+            public ulong AcknowledgedStep;
         }
         private static readonly Dictionary<IConnection, PeerState> Peers = new Dictionary<IConnection, PeerState>();
-        private static readonly Queue<(IConnection? Peer, Frame Frame)> Inbox = new Queue<(IConnection?, Frame)>();
+        private static readonly ByteBudgetQueue<(IConnection? Peer, Frame? Frame, Action? Control)> Inbox = new ByteBudgetQueue<(IConnection?,Frame?,Action?)>(256,16L*1024*1024);
         private static Guid Epoch;
         private static ulong Revision, RequestId, Step;
         public static ulong StepCount => Step;
@@ -31,6 +32,10 @@ namespace Shapez2Multiplayer
         public static int SimulationHz { get; private set; } = 20;
         private static int? RequestedRate;
         private static long? NextDigestTime;
+        private static int NextDigestPartition;
+        private static int PendingDigestParts;
+        private static double NextHeartbeat;
+        public static byte[]? SnapshotDigest {get;internal set;}
 #if COOP_QA
         public static int QaIntentDelayMs = 200;
         private static readonly Queue<(Frame Frame, double Due)> DelayedIntents = new Queue<(Frame, double)>();
@@ -48,6 +53,7 @@ namespace Shapez2Multiplayer
             ? MultiplayerCore.socketManager.Connecting.Count == 0
             : Welcomed && MultiplayerCore.connectionManager.FinishedConnecting && !ClientPausedForJoin);
         private static double Now => Time.realtimeSinceStartupAsDouble;
+        internal static bool CanReceive => Inbox.Count<192 && Inbox.BufferedBytes<12L*1024*1024;
         // Game assembly MVIDs detect binary differences, including builds sharing a version label.
         private static string Compatibility => "coop-alpha-4|" + GameEnvironmentManager.Version + "|" +
             typeof(CoopSession).Assembly.ManifestModule.ModuleVersionId + "|" +
@@ -60,6 +66,7 @@ namespace Shapez2Multiplayer
             Revision = RequestId = Step = SnapshotStep = 0; Welcomed = Applying = Faulted = ClientPausedForJoin = false;
             Status = "Offline"; NextStep = 0;
             LocalPlayerId = 0; SimulationHz = 20; RequestedRate = null; NextDigestTime = null;
+            NextDigestPartition=PendingDigestParts=0;NextHeartbeat=0;SnapshotDigest=null;CoopSimulation.ResetDigestIndex();
             CoopPrediction.Clear();
 #if COOP_QA
             DelayedIntents.Clear();
@@ -96,9 +103,10 @@ namespace Shapez2Multiplayer
         }
         public static void Receive(IConnection? peer, Frame frame)
         {
-            if (Inbox.Count >= 256) throw new InvalidDataException("Co-op receive queue exhausted");
-            Inbox.Enqueue((peer, frame));
+            if(!Inbox.TryEnqueue((peer,frame,null),frame.Payload.Length+64))throw new InvalidDataException("Co-op receive queue exhausted");
         }
+        public static void ReceiveControl(Action control,int bytes)
+        {if(!Inbox.TryEnqueue((null,null,control),checked(bytes+64)))throw new InvalidDataException("Co-op control queue exhausted");}
         public static bool Submit(IPlayerAction action)
         {
             if (!Ready) return false;
@@ -174,24 +182,27 @@ namespace Shapez2Multiplayer
                     while (DelayedIntents.Count > 0 && DelayedIntents.Peek().Due <= Now)
                         SendHost(DelayedIntents.Dequeue().Frame);
 #endif
-                foreach (var peer in Peers.Where(p => p.Value.Deadline < Now).Select(p => p.Key).ToArray())
-                {
-                    Shapez2Multiplayer.logger.Warning?.Log("Peer deadline expired: admitted=" + Peers[peer].Admitted +
-                        " waiting=" + Peers[peer].WaitingSnapshot + " step=" + Step);
-                    Peers[peer].Deadline = double.PositiveInfinity; peer.Close();
-                }
                 // Join packets are pure data; state mutations wait for the engine's simulation barrier.
                 Shapez2Multiplayer.GameSessionOrchestrator?.FinalizeLogicUpdate();
                 int budget = 256;
-                while (Inbox.Count > 0 && budget-- > 0)
+                long inboxStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+                while (budget-- > 0 && Inbox.TryDequeue(out var item))
                 {
-                    var item = Inbox.Dequeue();
-                    Handle(item.Peer, item.Frame);
+                    if(item.Peer!=null && !Peers.ContainsKey(item.Peer))continue;
+                    if(item.Control!=null)item.Control();else Handle(item.Peer, item.Frame!);
+                    if((System.Diagnostics.Stopwatch.GetTimestamp()-inboxStarted)*1000.0/System.Diagnostics.Stopwatch.Frequency>=Math.Max(4,Math.Min(12,Time.unscaledDeltaTime*400)))break;
                 }
+                foreach(var peer in Peers.Where(p=>p.Value.Deadline<Now).Select(p=>p.Key).ToArray())
+                {
+                    Shapez2Multiplayer.logger.Warning?.Log("Peer deadline expired: admitted="+Peers[peer].Admitted+" waiting="+Peers[peer].WaitingSnapshot+" step="+Step);
+                    Peers[peer].Deadline=double.PositiveInfinity;peer.Close();
+                }
+                if(MultiplayerCore.Client && Ready && Now>=NextHeartbeat)
+                {SendHost(new Frame(FrameKind.StepAck,Epoch,0,Step,Array.Empty<byte>()));NextHeartbeat=Now+1;}
                 if (MultiplayerCore.Hosting && MultiplayerCore.socketManager.Connecting.Count == 0)
                 {
                     var waiting = Peers.FirstOrDefault(p => p.Value.WaitingSnapshot);
-                    if (waiting.Key != null) BeginSnapshot(waiting.Key, waiting.Value);
+                    if (waiting.Key != null && !SnapshotPacking.Busy) BeginSnapshot(waiting.Key, waiting.Value);
                 }
                 if (MultiplayerCore.Hosting && Ready && RequestedRate.HasValue)
                 {
@@ -200,24 +211,39 @@ namespace Shapez2Multiplayer
                     ApplyRate(rate);
                 }
                 if (!Ready) NextStep = Now;
+                // Amortize small checks over rendering frames at complete steps.
+                // Commands remain ordered; no world data is read from an I/O worker.
+                if(MultiplayerCore.Hosting && Ready && PendingDigestParts>0)
+                {
+                    long digestStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+                    if(!Peers.Any(p=>p.Value.Admitted))PendingDigestParts=0;
+                    while(PendingDigestParts>0)
+                    {
+                        var digest=DigestSchedule.Encode(NextDigestPartition,CoopSimulation.Digest(NextDigestPartition));
+                        NextDigestPartition=DigestSchedule.Next(NextDigestPartition);
+                        Broadcast(new Frame(FrameKind.StateDigest,Epoch,0,Step,digest));
+#if COOP_QA
+                        Debug.Log("QA:CHECKSUM_HOST step="+Step+" digest="+BitConverter.ToString(digest));
+#endif
+                        PendingDigestParts--;
+                        if((System.Diagnostics.Stopwatch.GetTimestamp()-digestStarted)*1000.0/System.Diagnostics.Stopwatch.Frequency>=4)break;
+                    }
+                }
                 int stepBudget = 4;
-                while (MultiplayerCore.Hosting && Ready && Now >= NextStep && stepBudget-- > 0)
+                long stepsStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+                while (MultiplayerCore.Hosting && Ready && PendingDigestParts<8 && Peers.Values.All(p=>!p.Admitted || Step-p.AcknowledgedStep<(ulong)(SimulationHz*2)) && Now >= NextStep && stepBudget-- > 0)
                 {
                     NextStep += 1.0 / SimulationHz;
                     CoopSimulation.Advance();
                     Broadcast(new Frame(FrameKind.SimulationStep, Epoch, 0, ++Step, SessionPayloads.Step(Revision, SimulationHz)));
                     long time = Shapez2Multiplayer.GameSessionOrchestrator.Simulator.SimulationTime.Value;
-                    if (!NextDigestTime.HasValue) NextDigestTime = time + Game.Core.Simulation.Ticks.OneSecond.Value * 5;
-                    if (time >= NextDigestTime.Value)
+                    if (!NextDigestTime.HasValue) NextDigestTime = time + Game.Core.Simulation.Ticks.OneSecond.Value / 12;
+                    if (time >= NextDigestTime.Value && Peers.Any(p => p.Value.Admitted))
                     {
-                        NextDigestTime = time + Game.Core.Simulation.Ticks.OneSecond.Value * 5;
-                        var digest = CoopSimulation.Digest();
-                        Broadcast(new Frame(FrameKind.StateDigest, Epoch, 0, Step, digest));
-#if COOP_QA
-                        if (Peers.Any(p => p.Value.Admitted))
-                            Debug.Log("QA:CHECKSUM_HOST step=" + Step + " digest=" + BitConverter.ToString(digest));
-#endif
+                        NextDigestTime += Game.Core.Simulation.Ticks.OneSecond.Value / 12;
+                        PendingDigestParts+=4;
                     }
+                    if((System.Diagnostics.Stopwatch.GetTimestamp()-stepsStarted)*1000.0/System.Diagnostics.Stopwatch.Frequency>=8)break;
                 }
                 // Bound catch-up after a long rendering frame; simulation steps are never
                 // skipped on a replica. An overloaded host slows down the shared game.
@@ -237,6 +263,7 @@ namespace Shapez2Multiplayer
             state.WaitingSnapshot = false; state.Admitted = true; state.Deadline = Now + 120;
             Send(peer, new Frame(FrameKind.Welcome, Epoch, 0, Revision, SessionPayloads.Welcome(Step, SimulationHz, peer.UniversalId)));
             MultiplayerCore.socketManager.Admit(peer);
+            NextDigestPartition=PendingDigestParts=0;NextDigestTime=null;state.Deadline=Now+120;
         }
 
         private static void Handle(IConnection? peer, Frame frame)
@@ -301,7 +328,10 @@ namespace Shapez2Multiplayer
                 if (frame.Kind == FrameKind.StepAck && peer != null)
                 {
                     if (frame.Sequence > Step) throw new InvalidDataException("Invalid step acknowledgement");
-                    Peers[peer].Deadline = Now + 30; return;
+                    if(frame.Sequence<Peers[peer].AcknowledgedStep)throw new InvalidDataException("Step acknowledgement regressed");
+                    if(frame.Payload.Length!=0)throw new InvalidDataException("Invalid heartbeat");
+                    Peers[peer].AcknowledgedStep=frame.Sequence;
+                    Peers[peer].Deadline = Now + 60; return;
                 }
                 throw new InvalidDataException("Client sent a host-only message");
             }
@@ -320,8 +350,10 @@ namespace Shapez2Multiplayer
 #endif
                     Status = "Edit rejected: another player changed the world; retry"; break;
                 case FrameKind.StateDigest:
-                    if (frame.Sequence != Step || !frame.Payload.Span.SequenceEqual(CoopSimulation.Digest()))
+                    var partition=DigestSchedule.ReadIndex(frame.Payload.Span,NextDigestPartition);
+                    if (frame.Sequence != Step || !frame.Payload.Span.Slice(1).SequenceEqual(CoopSimulation.Digest(partition)))
                         throw new InvalidDataException("Production state checksum mismatch");
+                    NextDigestPartition=DigestSchedule.Next(NextDigestPartition);
 #if COOP_QA
                     Debug.Log("QA:CHECKSUM_CLIENT step=" + Step + " digest=" + BitConverter.ToString(frame.Payload.ToArray()));
 #endif
@@ -331,13 +363,13 @@ namespace Shapez2Multiplayer
                     SnapshotStep = Step;
                     CoopSimulation.PrepareSnapshot();
                     CoopSimulation.Digest(); // Apply the same signal-channel serialization maintenance as host capture.
+                    NextDigestPartition=0;
                     break;
                 case FrameKind.SimulationStep:
                     var boundary = SessionPayloads.ReadStep(frame.Payload.Span);
                     if (!Ready || frame.Sequence != Step + 1 || boundary.Revision != Revision || boundary.Hz != SimulationHz)
                         throw new InvalidDataException("Simulation step gap; reconnect required");
                     CoopSimulation.Advance(); Step = frame.Sequence;
-                    if (Step % 20 == 0) SendHost(new Frame(FrameKind.StepAck, Epoch, 0, Step, Array.Empty<byte>()));
                     Status = "Connected / step " + Step; break;
                 case FrameKind.SimulationRate:
                     var change = SessionPayloads.ReadStep(frame.Payload.Span);
@@ -368,6 +400,7 @@ namespace Shapez2Multiplayer
             if (!IsAdmitted(peer) || !MultiplayerCore.socketManager.Connecting.Contains(peer))
                 throw new InvalidDataException("Unexpected snapshot acknowledgement");
             Peers[peer].Deadline = Now + 30;
+            Peers[peer].AcknowledgedStep=Step;
         }
         public static void Fail(string reason)
         {

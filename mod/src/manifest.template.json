@@ -1,5 +1,5 @@
 ﻿{
-  "Version": "0.3.0-alpha.2",
+  "Version": "0.3.0-alpha.3",
   "Description": "Experimental host-ordered co-op fork. Gameplay validation incomplete.",
   "Author": "Shapez2 Co-op contributors; based on Bknibb",
   "AffectsSaveGames": false,

@@ -13,6 +13,8 @@ namespace Shapez2Multiplayer
     public class ShapezSocketManager
     {
         private List<ISocketManager> _socketManagers = new List<ISocketManager>();
+        private System.Threading.Tasks.Task<byte[]>? snapshotPacking;
+        private IConnection? snapshotPeer;
         public IReadOnlyCollection<ISocketManager> SocketManagers => _socketManagers;
         public IReadOnlyCollection<IConnection> Connected => _socketManagers.SelectMany(s => s.Connected).Where(CoopSession.IsAdmitted).ToArray();
         public List<IConnection> Connecting = new List<IConnection>();
@@ -23,6 +25,17 @@ namespace Shapez2Multiplayer
         public List<Tuple<IPacket, IConnection>> BufferedSendToPackets = new List<Tuple<IPacket, IConnection>>();
         public List<Tuple<IPacket, List<IConnection>>> BufferedSendToListPackets = new List<Tuple<IPacket, List<IConnection>>>();
         public List<Tuple<IPacket, IConnection>> BufferedSendToAllFromPackets = new List<Tuple<IPacket, IConnection>>();
+        private long bufferedBytes;
+        private void Buffer<T>(List<T> queue,T value,IPacket packet)
+        {
+            // These are latest-view hints; the normal refresh/ForceUpdateCursor republishes
+            // current values after admission. Replaying old cursor frames only adds latency.
+            if(packet is CursorPacket || packet is ViewportPropertyChangedPacket || packet is PlayerInteractionStateChangedPacket ||
+                packet is UpdateBuildingMassSelectionPacket || packet is UpdateIslandMassSelectionPacket || packet is PlacementIndicatorDataPacket)return;
+            int bytes=PacketExtensions.Encode(packet)?.Length??0;
+            if(queue.Count>=256 || bytes>16L*1024*1024-bufferedBytes)throw new System.IO.InvalidDataException("Join UI backlog exceeded budget");
+            queue.Add(value);bufferedBytes+=bytes;
+        }
         public Dictionary<uint, OtherPlayerEntityPlacementDrawer> PlayersDrawers = new Dictionary<uint, OtherPlayerEntityPlacementDrawer>();
         public Dictionary<uint, OtherPlayerHUDBuildingMassSelection> PlayersBuildingMassSelections = new Dictionary<uint, OtherPlayerHUDBuildingMassSelection>();
         public Dictionary<uint, OtherPlayerHUDIslandMassSelection> PlayersIslandMassSelections = new Dictionary<uint, OtherPlayerHUDIslandMassSelection>();
@@ -89,7 +102,10 @@ namespace Shapez2Multiplayer
                 SendToAllExcept(new PausePacket(true, new CombinedText("multiplayer.paused-dialog.description-waitingforplayer".T(), new RawText("\n"+string.Join(", ", Connecting.Select(c => c.Name))))), Connecting);
                 new PausePacket(true, new CombinedText("multiplayer.paused-dialog.description-waitingforplayer".T(), new RawText("\n" + string.Join(", ", Connecting.Select(c => c.Name))))).Handle(null);
             }
-            SendTo(new SavegamePacket(CoopSimulation.Capture(), Shapez2Multiplayer.SavegameOptionsManager.Uid), connection);
+            var snapshot=CoopSimulation.Capture();
+            CoopSession.SnapshotDigest=CoopSimulation.Digest();
+            snapshotPeer=connection;
+            snapshotPacking=SnapshotPacking.Start(snapshot,Shapez2Multiplayer.SavegameOptionsManager.Uid);
         }
 
         public void OnDisconnected(IConnection connection)
@@ -145,7 +161,7 @@ namespace Shapez2Multiplayer
         {
             if (Connecting.Count > 0 && !AlwaysAllowedToSend.Contains(packet.GetType()))
             {
-                BufferedSendToAllPackets.Add(packet);
+                Buffer(BufferedSendToAllPackets,packet,packet);
                 return true;
             }
             var encoded = PacketExtensions.Encode(packet);
@@ -163,7 +179,7 @@ namespace Shapez2Multiplayer
         {
             if (Connecting.Count > 0 && !AlwaysAllowedToSend.Contains(packet.GetType()))
             {
-                BufferedSendToAllExceptPackets.Add(new Tuple<IPacket, IConnection>(packet, excluded));
+                Buffer(BufferedSendToAllExceptPackets,new Tuple<IPacket,IConnection>(packet,excluded),packet);
                 return;
             }
             if (!Connected.Any(connection => connection != excluded)) return;
@@ -181,7 +197,7 @@ namespace Shapez2Multiplayer
         {
             if (Connecting.Count > 0 && !AlwaysAllowedToSend.Contains(packet.GetType()))
             {
-                BufferedSendToAllFromPackets.Add(new Tuple<IPacket, IConnection>(packet, from));
+                Buffer(BufferedSendToAllFromPackets,new Tuple<IPacket,IConnection>(packet,from),packet);
                 return;
             }
             if (!Connected.Any(connection => connection != from)) return;
@@ -199,7 +215,7 @@ namespace Shapez2Multiplayer
         {
             if (Connecting.Count > 0 && !AlwaysAllowedToSend.Contains(packet.GetType()))
             {
-                BufferedSendToAllExceptListPackets.Add(new Tuple<IPacket, List<IConnection>>(packet, excluded));
+                Buffer(BufferedSendToAllExceptListPackets,new Tuple<IPacket,List<IConnection>>(packet,excluded),packet);
                 return;
             }
             if (!Connected.Any(connection => !excluded.Contains(connection))) return;
@@ -218,7 +234,7 @@ namespace Shapez2Multiplayer
             if (!Connected.Contains(connection) && !Connecting.Contains(connection)) return;
             if (Connecting.Count > 0 && !AlwaysAllowedToSend.Contains(packet.GetType()))
             {
-                BufferedSendToPackets.Add(new Tuple<IPacket, IConnection>(packet, connection));
+                Buffer(BufferedSendToPackets,new Tuple<IPacket,IConnection>(packet,connection),packet);
                 return;
             }
             var encoded = PacketExtensions.Encode(packet);
@@ -231,7 +247,7 @@ namespace Shapez2Multiplayer
         {
             if (Connecting.Count > 0 && !AlwaysAllowedToSend.Contains(packet.GetType()))
             {
-                BufferedSendToListPackets.Add(new Tuple<IPacket, List<IConnection>>(packet, connections));
+                Buffer(BufferedSendToListPackets,new Tuple<IPacket,List<IConnection>>(packet,connections),packet);
                 return;
             }
             var encoded = PacketExtensions.Encode(packet);
@@ -283,6 +299,16 @@ namespace Shapez2Multiplayer
         bool? LastViewportShowAllIslandLayers;
         public void Update()
         {
+            if(snapshotPacking!=null && snapshotPacking.IsCompleted)
+            {
+                var pending=snapshotPacking;var peer=snapshotPeer!;snapshotPacking=null;snapshotPeer=null;
+                try
+                {
+                    var bytes=pending.GetAwaiter().GetResult();
+                    if(CoopSession.IsAdmitted(peer) && Connecting.Contains(peer) && !peer.Send(bytes,Packet.Savegame))peer.Close();
+                }
+                catch(Exception ex){Shapez2Multiplayer.logger.Warning?.Log("Snapshot packing failed: "+ex.Message);peer.Close();}
+            }
             lock (_socketManagers)
             {
                 foreach (var sm in _socketManagers.ToList()) // the lock will not work for some reason so just use a copy
@@ -375,6 +401,7 @@ namespace Shapez2Multiplayer
                 SendToAllFrom(packet.Item1, packet.Item2);
             }
             BufferedSendToAllFromPackets.Clear();
+            bufferedBytes=0;
         }
     }
 }

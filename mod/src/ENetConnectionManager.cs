@@ -1,4 +1,4 @@
-﻿using ENet;
+using ENet;
 using Shapez2Multiplayer.Packets;
 using Steamworks;
 using System;
@@ -6,90 +6,44 @@ using static Shapez2Multiplayer.MultiplayerCore;
 
 namespace Shapez2Multiplayer
 {
-    public class ENetConnectionManager : IConnectionManager
+    public sealed class ENetConnectionManager : IConnectionManager
     {
-        public Host host;
-        public Peer peer;
-        public bool Connected = false;
-        public IConnection Connection { get; }
-        bool IConnectionManager.Connected => Connected;
-
+        private readonly ENetIoPump pump;
+        private readonly ENetConnection connection;
+        private bool closed;
+        public bool Connected {get;private set;}
+        public IConnection Connection => connection;
         public event Action<DisconnectReason> DisconnectedEvent;
         public event Action ConnectedEvent;
         public event Action<byte[]> MessageEvent;
-
-        public ENetConnectionManager(Host host, Peer peer)
+        public ENetConnectionManager(Host host,Peer peer)
         {
-            this.host = host;
-            this.peer = peer;
-            Connection = new ENetConnection(peer);
+            uint slot=peer.ID;
+            pump=new ENetIoPump(host,peer);
+            connection=new ENetConnection(pump,1,slot);
         }
-
         public void Close()
-        {
-            peer.Disconnect(0);
-            host.Flush();
-            host.Dispose();
-        }
-
-        public void OnConnected()
-        {
-            Connected = true;
-            if (SteamClient.IsValid) Connection.Send(PacketExtensions.Encode(new PlayerInfoPacket(SteamClient.Name))!, Packets.Packet.PlayerInfo);
-            ConnectedEvent();
-        }
-
-        public void OnDisconnected(DisconnectReason reason)
-        {
-            Shapez2Multiplayer.logger.Warning?.Log("ENet host disconnected reason=" + reason + " step=" + CoopSession.StepCount);
-            Connected = false;
-            DisconnectedEvent(reason);
-        }
-
-        public void OnMessage(ENet.Packet packet)
-        {
-            if (packet.Length > 512 * 1024) { CoopSession.Fail("Oversized transport packet"); return; }
-            var buffer = new byte[packet.Length];
-            packet.CopyTo(buffer);
-            MessageEvent(buffer);
-        }
-
+        {if(closed)return;closed=true;Connected=false;connection.MarkClosed();pump.Dispose();}
         public void Update()
         {
-            bool polled = false;
-
-            int budget = 256;
-            while (!polled && budget-- > 0)
+            if(closed)return;
+            if(pump.Failure!=null){CoopSession.Fail(pump.Failure);Close();return;}
+            int budget=256;
+            while(!closed && budget-->0 && CoopSession.CanReceive && pump.Poll(out var ev))
             {
-                if (host.CheckEvents(out Event netEvent) <= 0)
+                if(ev.Type==EventType.Connect)
                 {
-                    if (host.Service(0, out netEvent) <= 0)
-                        break;
-
-                    polled = true;
+                    Connected=true;
+                    if(SteamClient.IsValid)Connection.Send(PacketExtensions.Encode(new PlayerInfoPacket(SteamClient.Name))!,Packets.Packet.PlayerInfo);
+                    ConnectedEvent?.Invoke();
                 }
-
-                switch (netEvent.Type)
+                else if(ev.Type==EventType.Receive)MessageEvent?.Invoke(ev.Data!);
+                else
                 {
-                    case EventType.None:
-                        break;
-
-                    case EventType.Connect:
-                        OnConnected();
-                        break;
-
-                    case EventType.Disconnect:
-                        OnDisconnected(DisconnectReason.Lostconnection);
-                        break;
-
-                    case EventType.Timeout:
-                        OnDisconnected(DisconnectReason.Timedout);
-                        break;
-
-                    case EventType.Receive:
-                        try { OnMessage(netEvent.Packet); }
-                        finally { netEvent.Packet.Dispose(); }
-                        break;
+                    Connected=false;connection.MarkClosed();
+                    var reason=ev.Type==EventType.Timeout?DisconnectReason.Timedout:DisconnectReason.Lostconnection;
+                    Shapez2Multiplayer.logger.Warning?.Log("ENet host disconnected reason="+reason+" step="+CoopSession.StepCount);
+                    DisconnectedEvent?.Invoke(reason);
                 }
             }
         }

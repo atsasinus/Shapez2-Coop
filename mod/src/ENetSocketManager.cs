@@ -1,98 +1,50 @@
-﻿using ENet;
+using ENet;
 using System;
 using System.Collections.Generic;
 
 namespace Shapez2Multiplayer
 {
-    public class ENetSocketManager : ISocketManager
+    public sealed class ENetSocketManager : ISocketManager
     {
-        public Host host;
-        public IReadOnlyCollection<Peer> Connections => _Connections;
-        public bool Valid { get; private set; } = true;
-        private List<Peer> _Connections = new List<Peer>();
-        public IReadOnlyCollection<IConnection> Connected => _ENetConnections.Values;
-        private Dictionary<uint, ENetConnection> _ENetConnections = new Dictionary<uint, ENetConnection>();
-
+        private readonly ENetIoPump pump;
+        private readonly Dictionary<ulong,ENetConnection> connections=new Dictionary<ulong,ENetConnection>();
+        public bool Valid {get;private set;}=true;
+        public IReadOnlyCollection<IConnection> Connected => connections.Values;
         public event Action<IConnection> DisconnectedEvent;
         public event Action<IConnection> ConnectedEvent;
-        public event Action<IConnection, byte[]> MessageEvent;
-
-        public ENetSocketManager(Host host)
-        {
-            this.host = host;
-        }
-
+        public event Action<IConnection,byte[]> MessageEvent;
+        public ENetSocketManager(Host host) {pump=new ENetIoPump(host);}
         public void Close()
         {
-            Valid = false;
-            foreach (var peer in _Connections) peer.Disconnect(0);
-            host.Flush();
-            host.Dispose();
+            if(!Valid)return;Valid=false;
+            foreach(var peer in connections.Values)peer.MarkClosed();
+            pump.Dispose();connections.Clear();
         }
-
-        public void OnConnected(Peer peer)
-        {
-            var connection = new ENetConnection(peer);
-            ConnectedEvent(connection);
-            _ENetConnections.Add(peer.ID, connection);
-            _Connections.Add(peer);
-        }
-
-        public void OnDisconnected(Peer peer)
-        {
-            DisconnectedEvent(_ENetConnections[peer.ID]);
-            _ENetConnections.Remove(peer.ID);
-            _Connections.Remove(peer);
-        }
-
-        public void OnMessage(Peer peer, Packet packet)
-        {
-            if (packet.Length > 512 * 1024) { peer.Disconnect(0); return; }
-            var buffer = new byte[packet.Length];
-            packet.CopyTo(buffer);
-            MessageEvent(_ENetConnections[peer.ID], buffer);
-        }
-
         public void Update()
         {
-            bool polled = false;
-
-            int budget = 256;
-            while (!polled && budget-- > 0)
+            if(!Valid)return;
+            if(pump.Failure!=null){CoopSession.Fail(pump.Failure);Close();return;}
+            int budget=256;
+            while(Valid && budget-->0 && CoopSession.CanReceive && pump.Poll(out var ev))
             {
-                if (host.CheckEvents(out Event netEvent) <= 0)
+                if(ev.Type==EventType.Connect)
                 {
-                    if (host.Service(0, out netEvent) <= 0)
-                        break;
-
-                    polled = true;
+                    var peer=new ENetConnection(pump,ev.Key,ev.Slot);
+                    ulong key=ev.Key;peer.ClosedLocally=()=>Detach(key,peer);
+                    connections.Add(ev.Key,peer);ConnectedEvent?.Invoke(peer);
                 }
-
-                switch (netEvent.Type)
+                else if(connections.TryGetValue(ev.Key,out var peer))
                 {
-                    case EventType.None:
-                        break;
-
-                    case EventType.Connect:
-                        OnConnected(netEvent.Peer);
-                        break;
-
-                    case EventType.Disconnect:
-                        Shapez2Multiplayer.logger.Warning?.Log("ENet peer disconnect id=" + netEvent.Peer.ID + " step=" + CoopSession.StepCount);
-                        OnDisconnected(netEvent.Peer);
-                        break;
-
-                    case EventType.Timeout:
-                        Shapez2Multiplayer.logger.Warning?.Log("ENet peer timeout id=" + netEvent.Peer.ID + " step=" + CoopSession.StepCount);
-                        OnDisconnected(netEvent.Peer);
-                        break;
-
-                    case EventType.Receive:
-                        try { OnMessage(netEvent.Peer, netEvent.Packet); }
-                        finally { netEvent.Packet.Dispose(); }
-                        break;
+                    if(ev.Type==EventType.Receive)MessageEvent?.Invoke(peer,ev.Data!);
+                    else
+                    {
+                        Shapez2Multiplayer.logger.Warning?.Log("ENet peer "+ev.Type+" id="+ev.Slot+" step="+CoopSession.StepCount);
+                        Detach(ev.Key,peer);
+                    }
                 }
             }
         }
+        private void Detach(ulong key,ENetConnection peer)
+        {if(!connections.Remove(key))return;peer.MarkClosed();DisconnectedEvent?.Invoke(peer);}
     }
 }

@@ -41,7 +41,7 @@ $source = Join-Path $stage 'source'
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Path $modFolder,$source,$dist -Force | Out-Null
 foreach ($name in $runtime) { Copy-Item -LiteralPath (Join-Path $build $name) -Destination $modFolder }
-foreach ($name in @('README.md','TESTING.md','LICENSE','THIRD-PARTY.md','DEPENDENCIES.json')) {
+foreach ($name in @('README.md','TESTING.md','ARCHITECTURE.md','LICENSE','THIRD-PARTY.md','DEPENDENCIES.json')) {
     Copy-Item -LiteralPath (Join-Path $root "mod/$name") -Destination $modFolder
 }
 $licenseFolder = Join-Path $modFolder 'licenses'

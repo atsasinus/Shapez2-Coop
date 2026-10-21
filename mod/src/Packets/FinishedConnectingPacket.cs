@@ -36,7 +36,7 @@ namespace Shapez2Multiplayer.Packets
             }
             CoopSession.FinishedJoining(connection);
             if (Step != CoopSession.StepCount || Revision != CoopSession.EditRevision ||
-                !Digest.SequenceEqual(CoopSimulation.Digest()))
+                CoopSession.SnapshotDigest==null || !Digest.SequenceEqual(CoopSession.SnapshotDigest))
                 throw new InvalidDataException("Loaded snapshot does not match host state");
 #if COOP_QA
             UnityEngine.Debug.Log("QA:SNAPSHOT_MATCH step=" + Step + " digest=" + System.BitConverter.ToString(Digest));

@@ -63,6 +63,7 @@ namespace Shapez2Multiplayer
         {
             if (!string.IsNullOrEmpty(stopFile) && System.IO.File.Exists(stopFile))
             {
+                if(CoopQaPerf.Instance!=null){stopFile=null;reported=true;CoopQaPerf.Instance.RequestStop();return;}
                 stopFile = null; reported = true; Debug.Log("QA:SHUTDOWN");
                 MultiplayerCore.Disconnect(canReturnToMenu: false);
                 if (Shapez2Multiplayer.Game.IsGameInSession(out IGameStartOptions _))

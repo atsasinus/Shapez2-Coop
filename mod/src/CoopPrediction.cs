@@ -154,7 +154,7 @@ namespace Shapez2Multiplayer
                 foreach (var preview in pending.Values)
                 {
 #if COOP_QA
-                    var before = preview.Checked ? null : CoopSimulation.Digest();
+                    var before = preview.Checked || CoopQaPerf.Instance!=null ? null : CoopSimulation.Digest();
 #endif
                     if (preview.Buildings.Count > 0) SmartBuildingBlueprintRenderer.Draw(options, preview.Buildings, null);
                     if (preview.Islands.Count > 0)

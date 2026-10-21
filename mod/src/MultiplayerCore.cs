@@ -266,6 +266,8 @@ namespace Shapez2Multiplayer
                 bool wasClient = Client;
                 if (connectionManager != null)
                 {
+                    if (connectionManager.FinishedConnecting)
+                    {
                     Shapez2Multiplayer.GameSessionOrchestrator?.LocalPlayer.HUDData.Pins.OnPinAdded.Unregister(MultiplayerEvents.OnPinAdded);
                     Shapez2Multiplayer.GameSessionOrchestrator?.LocalPlayer.HUDData.Pins.OnPinRemoved.Unregister(MultiplayerEvents.OnPinRemoved);
                     ((IEntityPlacementStateController?)Shapez2Multiplayer.EntityPlacementRunner)?.OnPlacementDataChanged.Unregister(MultiplayerEvents.OnPlacementDataChanged);
@@ -273,6 +275,8 @@ namespace Shapez2Multiplayer
                     Shapez2Multiplayer.PlayerWaypoints?.OnWaypointAdded.Unregister(MultiplayerEvents.OnWaypointAdded);
                     Shapez2Multiplayer.PlayerWaypoints?.OnWaypointChanged.Unregister(MultiplayerEvents.OnWaypointChanged);
                     Shapez2Multiplayer.PlayerWaypoints?.OnWaypointRemoved.Unregister(MultiplayerEvents.OnWaypointRemoved);
+                    Shapez2Multiplayer.Research.PlayerLevelGoals.OnLeveledUp.Unregister(MultiplayerEvents.OnResearchPlayerLevelGoalManagerLeveledUpClient);
+                    }
                     connectionManager.ConnectionManager.Close();
                     connectionManager = null;
                 }
@@ -290,13 +294,7 @@ namespace Shapez2Multiplayer
                 if (wasClient && canReturnToMenu && Shapez2Multiplayer.Game.IsGameInSession(out IGameStartOptions _))
                 {
                     Shapez2Multiplayer.GameSessionOrchestrator.AudioManager.FadeOutMusic();
-                    Shapez2Multiplayer.GameFlowNavigator.LoadMainMenu().ContinueWith(async _ =>
-                    {
-                        if (disconnectReason == DisconnectReason.None) return;
-                        await UniTask.DelayFrame(1);
-                        Shapez2Multiplayer.MainMenuOrchestratorDialogStack.Show<HUDDialogSimpleInfo>(Globals.Resources.UIDialogSimpleInfoPrefab).Init("multiplayer.disconnected-dialog.title".T(), GetReasonTranslation(disconnectReason));
-                        Shapez2Multiplayer.MainMenuStateManagerUISoundPlayer.PlayError();
-                    });
+                    ReturnAfterDisconnect(disconnectReason);
                 }
                 else if (wasClient && Shapez2Multiplayer.Game.IsGameInMainMenu())
                 {
@@ -309,6 +307,25 @@ namespace Shapez2Multiplayer
                 Shapez2Multiplayer.logger.Error.Log("Error while Disconnecting");
                 Shapez2Multiplayer.logger.Exception.LogException(ex);
             }
+        }
+        private static System.Threading.Tasks.Task? menuTransition;
+        public static System.Threading.Tasks.Task ReturnToMenu()
+        {
+            if(menuTransition!=null && !menuTransition.IsCompleted)return menuTransition;
+            if(Shapez2Multiplayer.Game.IsGameInMainMenu())return System.Threading.Tasks.Task.CompletedTask;
+            return menuTransition=Shapez2Multiplayer.GameOrchestrator.LoadMainMenu();
+        }
+        private static async void ReturnAfterDisconnect(DisconnectReason reason)
+        {
+            try
+            {
+                await ReturnToMenu();
+                if(reason==DisconnectReason.None)return;
+                await UniTask.DelayFrame(1);
+                Shapez2Multiplayer.MainMenuOrchestratorDialogStack.Show<HUDDialogSimpleInfo>(Globals.Resources.UIDialogSimpleInfoPrefab).Init("multiplayer.disconnected-dialog.title".T(),GetReasonTranslation(reason));
+                Shapez2Multiplayer.MainMenuStateManagerUISoundPlayer.PlayError();
+            }
+            catch(Exception ex){Shapez2Multiplayer.logger.Error?.Log(ex.ToString());}
         }
         public static IText GetReasonTranslation(DisconnectReason reason)
         {

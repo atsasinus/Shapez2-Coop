@@ -84,7 +84,10 @@ namespace Shapez2Multiplayer
 
             InfoConnection? fromInfo = null;
             if (from.HasValue) if (ConnectionsDict.TryGetValue(from.Value, out InfoConnection c)) fromInfo = c;
-            packet.Handle(null, fromInfo);
+            if(packet is CoopPacket coop)CoopSession.Receive(null,coop.Frame);
+            else CoopSession.ReceiveControl(()=>{
+                if(ReferenceEquals(this,MultiplayerCore.connectionManager))packet.Handle(null,fromInfo);
+            },data.Length);
         }
         public bool SendToAll(IPacket packet)
         {

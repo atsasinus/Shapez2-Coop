@@ -17,6 +17,9 @@ namespace Shapez2Multiplayer
         private byte[] staleDelete;
         private BuildingId replacement;
         private uint rollbacksBeforeStale;
+        private readonly bool skipProduction,fullPreviewDigest;
+        public CoopQaActions(bool skipProduction=false,bool fullPreviewDigest=true)
+        {this.skipProduction=skipProduction;this.fullPreviewDigest=fullPreviewDigest;}
         public bool Complete => phase == 9;
 
         private static ActionModifyBuildings Place(PlaceBuildingPayload payload) =>
@@ -106,6 +109,7 @@ namespace Shapez2Multiplayer
             }
             else if (phase == 7)
             {
+                if(skipProduction){phase=9;Debug.Log("QA:ACTIONS_PASS revision="+CoopSession.EditRevision);return;}
                 if (!CoopQaProduction.HasOutput) throw new InvalidOperationException("Production fixture never produced an item");
                 Submit(new ClearBuildingContentPlayerAction(map, Shapez2Multiplayer.GameSessionOrchestrator.LocalPlayer,
                     new[] { CoopQaProduction.Producer.Id }));
@@ -121,10 +125,10 @@ namespace Shapez2Multiplayer
         {
             revision = CoopSession.EditRevision;
             phaseStep = CoopSession.StepCount;
-            var before = CoopSimulation.Digest();
+            var before = fullPreviewDigest?CoopSimulation.Digest():null;
             if (!Shapez2Multiplayer.PlayerActions.TryScheduleAction(action)) throw new InvalidOperationException("QA action was not queued");
             if (CoopSession.EditRevision != revision) throw new InvalidOperationException("Local commit occurred before host response");
-            if (!before.SequenceEqual(CoopSimulation.Digest())) throw new InvalidOperationException("Preview creation mutated simulation state");
+            if (before!=null && !before.SequenceEqual(CoopSimulation.Digest())) throw new InvalidOperationException("Preview creation mutated simulation state");
             if (action is ActionModifyBuildings && (CoopPrediction.PendingCount != 1 || CoopPrediction.VisualCount == 0))
                 throw new InvalidOperationException("No immediate visual prediction for building action");
         }

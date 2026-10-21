@@ -20,8 +20,43 @@ static class Program
     static Frame Intent(ulong id, byte value = 1) => new Frame(FrameKind.Intent, Epoch, id, 0, new[] { value });
     static void Main()
     {
-        Frames(); Host(); Client(); Snapshots(); SessionBoundaries(); Predictions();
+        Frames(); Host(); Client(); Snapshots(); SessionBoundaries(); Predictions(); TransportQueues(); DigestCoverage();
         Console.WriteLine($"PASS: {checks} protocol assertions; frame fuzz/truncation, four participants, concurrent ordering, replay, fail-closed commits, bounded snapshots.");
+    }
+    static void TransportQueues()
+    {
+        var q=new ByteBudgetQueue<int>(3,10);
+        Check(q.TryEnqueue(1,6) && !q.TryEnqueue(2,5) && q.TryEnqueue(2,4),"transport aggregate bytes");
+        Check(q.BufferedBytes==10 && q.TryDequeue(out var first) && first==1 && q.BufferedBytes==4,"transport ordered release");
+        Check(q.TryEnqueue(3,0) && q.TryEnqueue(4,0) && !q.TryEnqueue(5,0),"transport item budget includes empty events");
+        q.Clear();Check(q.BufferedBytes==0 && q.Count==0 && !q.TryDequeue(out _),"transport reset releases all");
+        var concurrent=new ByteBudgetQueue<int>(64,64);
+        int consumed=0;
+        var producer=Task.Run(()=>{for(int i=0;i<10000;i++){while(!concurrent.TryEnqueue(i,1))Thread.Yield();}});
+        while(consumed<10000)
+        {
+            if(concurrent.TryDequeue(out var value))Check(value==consumed++,"transport cross-thread FIFO");
+            else Thread.Yield();
+        }
+        producer.Wait();Check(concurrent.Count==0 && concurrent.BufferedBytes==0,"transport final accounting");
+    }
+    static void DigestCoverage()
+    {
+        var seen=new System.Collections.Generic.HashSet<int>();int index=0;
+        for(int i=0;i<DigestSchedule.Partitions;i++)
+        {
+            var payload=DigestSchedule.Encode(index,new byte[32]);
+            Check(DigestSchedule.ReadIndex(payload,index)==index && seen.Add(index),"every partition once per cycle");
+            int expected=DigestSchedule.Next(index);
+            Reject(()=>DigestSchedule.ReadIndex(payload,expected),"replayed/skipped partition");
+            index=expected;
+        }
+        Check(index==0 && seen.Count==DigestSchedule.Partitions,"bounded full coverage cycle");
+        Reject(()=>DigestSchedule.ReadIndex(new byte[32],0),"truncated partition digest");
+        Reject(()=>DigestSchedule.Encode(DigestSchedule.Partitions,new byte[32]),"out of range partition");
+        Reject(()=>DigestSchedule.Encode(0,new byte[31]),"truncated hash");
+        for(int i=-100;i<100;i++)
+        {int p=DigestSchedule.Partition(i,int.MaxValue,int.MinValue);Check(p>=0 && p<DigestSchedule.Partitions && p==DigestSchedule.Partition(i,int.MaxValue,int.MinValue),"stable signed coordinate mapping");}
     }
     static void SessionBoundaries()
     {

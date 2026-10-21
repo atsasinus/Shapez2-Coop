@@ -1,7 +1,8 @@
 param([Parameter(Mandatory=$true)][string]$SaveFile,
       [ValidateRange(10,60)][int]$Seconds = 15,
       [ValidatePattern('^[a-zA-Z0-9-]+$')][string]$Label = 'baseline',
-      [ValidateRange(120,600)][int]$TimeoutSeconds = 360)
+      [ValidateRange(120,600)][int]$TimeoutSeconds = 360,
+      [switch]$ExpectDesync)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $qa = [IO.Path]::GetFullPath((Join-Path $root 'local/qa'))
@@ -35,6 +36,8 @@ foreach ($role in @('host','client')) {
 }
 $oldProfile=$env:SHAPEZ2_COOP_QA_PROFILE; $oldStop=$env:SHAPEZ2_COOP_QA_STOP_FILE
 $oldSave=$env:SHAPEZ2_COOP_PERF_SAVE; $oldSeconds=$env:SHAPEZ2_COOP_PERF_SECONDS
+$oldDesync=$env:SHAPEZ2_COOP_PERF_DESYNC
+$env:SHAPEZ2_COOP_PERF_DESYNC=if($ExpectDesync){'1'}else{'0'}
 $env:SHAPEZ2_COOP_PERF_SAVE=Join-Path $run 'input.spz2'; $env:SHAPEZ2_COOP_PERF_SECONDS="$Seconds"
 $exe=Join-Path $game 'shapez 2.exe'; $processes=@{}; $problem=''; $passed=$false; $exitCodes=@{}
 function Read-Log([string]$role) {
@@ -70,6 +73,9 @@ try {
     $clientChecks=[regex]::Matches($clientLog,'QA:CHECKSUM_CLIENT (step=\d+ digest=[A-F0-9-]+)') | ForEach-Object {$_.Groups[1].Value}
     $shared=@($clientChecks | Where-Object {$hostChecks -contains $_})
     if ($shared.Count -lt 2 -or $hostLog -notmatch 'QA:SNAPSHOT_MATCH') {throw 'Insufficient agreed simulation boundaries'}
+    $partitions=@($shared | ForEach-Object { ($_ -split 'digest=')[1].Substring(0,2) } | Sort-Object -Unique)
+    if($partitions.Count -ne 256){throw 'Missing complete dynamic-state digest coverage'}
+    if($ExpectDesync -and ($clientLog -notmatch 'PERF:EXPECTED_DESYNC' -or $hostLog -notmatch 'PERF:PEER_ISOLATED hostActive=True')){throw 'Missing fail-closed simulation corruption evidence'}
     $passed=$true
 } catch { $problem=$_.Exception.Message }
 finally {
@@ -78,10 +84,15 @@ finally {
         $p=$processes[$role]
         if (!$p.WaitForExit(30000)) { $problem+=" $role shutdown timeout."; $passed=$false; if ($p.Path -eq $exe) {$p.Kill();$p.WaitForExit()} }
         $exitCodes[$role]=$p.ExitCode
-        if ($p.ExitCode -ne 0 -or (Read-Log $role) -match 'QA:FAIL|Exception:') {$passed=$false;$problem+=" $role runtime/shutdown error."}
+        $runtimeLog=Read-Log $role
+        if($ExpectDesync -and $role -eq 'client' -and $runtimeLog -match 'PERF:EXPECTED_DESYNC'){
+            $runtimeLog=$runtimeLog.Replace('System.IO.InvalidDataException: Production state checksum mismatch','EXPECTED_CHECKSUM_REJECTION')
+        }
+        if ($p.ExitCode -ne 0 -or $runtimeLog -match 'QA:FAIL|Exception:') {$passed=$false;$problem+=" $role runtime/shutdown error."}
     }
     $env:SHAPEZ2_COOP_QA_PROFILE=$oldProfile; $env:SHAPEZ2_COOP_QA_STOP_FILE=$oldStop
     $env:SHAPEZ2_COOP_PERF_SAVE=$oldSave; $env:SHAPEZ2_COOP_PERF_SECONDS=$oldSeconds
+    $env:SHAPEZ2_COOP_PERF_DESYNC=$oldDesync
     @{passed=$passed;problem=$problem;label=$Label;seconds=$Seconds;inputSha256=$inputHash;exitCodes=$exitCodes;
       modSha256=(Get-FileHash (Join-Path $run 'host/mods/Shapez2Multiplayer/Shapez2Multiplayer.dll')).Hash;logs=$run} |
       ConvertTo-Json -Depth 5 | Set-Content (Join-Path $run 'result.json')

@@ -66,12 +66,12 @@ namespace Shapez2Multiplayer.Packets
                 // A unique local UID additionally prevents collision with a player's saves.
                 await Shapez2Multiplayer.GameOrchestrator.LoadSession(new GameStartOptionsContinueExisting(
                     savegameBlobReader, false, "coop-replica-" + Guid.NewGuid().ToString("N"), false));
-                CoopSession.ReplicaSession = Shapez2Multiplayer.GameSessionOrchestrator;
                 if (!ReferenceEquals(joining, MultiplayerCore.connectionManager))
                 {
-                    await Shapez2Multiplayer.GameOrchestrator.LoadMainMenu();
+                    await MultiplayerCore.ReturnToMenu();
                     return;
                 }
+                CoopSession.ReplicaSession = Shapez2Multiplayer.GameSessionOrchestrator;
                 if (CoopSession.ReplicaSession == null) throw new InvalidOperationException("Snapshot world failed to load");
                     joining.HostDrawer = Shapez2Multiplayer.CreateOtherPlayerEntityPlacementDrawer();
                     joining.HostBuildingMassSelection = HUDMultiplayerMassSelectionsHost.Instance.CreateOtherPlayerHUDBuildingMassSelection(null);
@@ -99,7 +99,7 @@ namespace Shapez2Multiplayer.Packets
             catch (Exception ex)
             {
                 Shapez2Multiplayer.logger.Error?.Log(ex.ToString());
-                CoopSession.Fail("Snapshot loading failed: " + ex.Message);
+                if (ReferenceEquals(joining, MultiplayerCore.connectionManager)) CoopSession.Fail("Snapshot loading failed: " + ex.Message);
             }
             finally { SavegameEncoded.Dispose(); }
         }

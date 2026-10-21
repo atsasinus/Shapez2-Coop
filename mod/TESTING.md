@@ -23,7 +23,7 @@ Protocol command (workspace SDK): `local/tools/dotnet/dotnet.exe run --project m
 
 Do not equate protocol tests with in-engine tests: runtime command adapter currently implements stricter observed-revision rejection independently of the tested general sequencer.
 
-Required next gameplay cases: blueprint placement/deletion; research purchase and operator goals; constant signal edit; disconnect during snapshot; forced state corruption detected; snapshot recovery; bounded throughput and stable memory on a large factory. Unity reports GraphicsBuffer/JobTempAlloc cleanup warnings during QA shutdown; their origin and performance impact are not yet isolated.
+Required next gameplay cases: blueprint placement/deletion; research purchase and operator goals; constant signal edit; disconnect during snapshot; snapshot recovery; long-session bounded throughput and stable memory on a large factory. Unity reports GraphicsBuffer/JobTempAlloc cleanup warnings during QA shutdown; their origin and performance impact are not yet isolated.
 
 Build QA with `mod/tools/build-qa.ps1 -GameDirectory '<installed-game>'`, prepare the host/client profiles with `mod/tools/prepare-qa.ps1` (also `-ProfileName client-profile`), then run `mod/tools/run-qa.ps1 -PeerCount 3` for four processes. The runner prepares observer profiles, validates every participant and shuts down only processes it created.
 
@@ -35,7 +35,7 @@ Frequency/prediction commands: `mod/tools/run-qa.ps1 -PeerCount 2 -SimulationHz 
 
 UI command after `build-qa.ps1`: `mod/tools/run-ui-qa.ps1`. It uses a separate executable/profile and read-only junctions to the isolated game data, leaves manual windows alone, waits for the native menu transition, runs in the background and tests real HUD callbacks. No networking/Steam account is used. Screenshots need a rendering process without batchmode; a black initial capture is not visual evidence. Earlier startup/Steam/shutdown-interrupted runs were not passes. The normal alpha.2 compiles without this UI bot or screenshot module reference. Authoritative command processing and simulation stepping were not changed by these UI fixes; the full multiplayer gate was not repeated for alpha.2.
 
-Next priority: extend the existing two-client gameplay gate to blueprint/platform placement and research progression with real production, then deliberately corrupt a replica and verify fail-closed desync handling. Keep the current frequency/prediction/reconnect gates as regressions.
+Next priority: extend the existing two-client gameplay gate to blueprint/platform placement and research progression with real production, then extend the proven corruption check to additional production systems. Keep the current frequency/prediction/reconnect gates as regressions.
 
 ## Large-factory repair (alpha.3)
 
@@ -49,3 +49,16 @@ The original four-backup save directory was copied to an ignored fixture and ver
 `run-perf-qa.ps1 -SaveFile '<copy under local/qa>' -Label comparison` measures native/host/native, joins two real game processes and requires all 256 partition indices to match. Set `SHAPEZ2_COOP_PERF_EXERCISE=1` to add build/delete/stale/reconnect. QA-only worker-count variables select different engine worker counts. `-ExpectDesync` injects the producer-buffer corruption; `SHAPEZ2_COOP_PERF_STALL_MS=5000` adds a bounded client stall. Do not compare deliberately stalled samples to ordinary performance samples.
 
 Full capture and loaded-world verification remain synchronous and expensive at join boundaries. ZIP packing alone runs in a bounded pure-data worker. Full preview-purity hashes are disabled only inside the large performance harness; the dedicated small-factory regression retains them. Early repair attempts that exposed cargo-order mismatch, duplicate menu loading, or an artificial full-preview-hash backlog were failed runs, not passes. Native GraphicsBuffer/JobTempAlloc shutdown warnings remain; successful gates require exit 0 and no unexpected exceptions.
+## Final alpha.3 validation
+
+The final core was rerun after fixing the render-frame scheduling ceiling (pending checks now share frames with bounded catch-up steps rather than reserving four exclusive frames per group).
+
+| Final gate | Observed result |
+|---|---|
+| Large original world, 20 Hz | `local/qa/perf-final20-20261021-193252/` PASS; two exits 0. Native-before 540.3 frame/s, host-alone 461.7, native-after 493.3. Host p95 5.256 ms / maximum 26.733 ms; 300 steps and exactly 15 simulated seconds in 15.002 wall seconds. Baseline host-alone: 179.9 frame/s, p95 26.818 ms / maximum 1459.524 ms, only 11.55 simulated seconds in 15 wall seconds. Native-window variance is visible; these are reproducible engine measurements, not a visible-FPS promise. |
+| Large connected world + edits/rejoin | Same final run PASS with host eight / client three workers, complete 256-partition matching coverage, four committed edits and stale rejection, reconnect revision 4. Connected host: 200.3 frame/s, p95 11.364 ms / p99 20.513 ms / maximum 59.911 ms, partition hash mean 6.204 ms, 15 simulated seconds / 15.007 wall seconds. One-time capture/full join digest peaked at a 2310.5 ms host frame; this cost remains explicit. |
+| Large world, 60 Hz / cap 60 | `local/qa/perf-final60-20261021-193628/` PASS; two exits 0 and all partition indices agree. Host 1048 steps / 20.019 wall seconds = about 52.35 updates/s, 17.467 simulated seconds, 49.15 render frame/s; p95 28.054 ms. Real-time 60 Hz was NOT achieved by these two local clients. Shared simulation slows under load; no steps/checks are dropped and no equality checks bypassed. |
+| Four real participants regression | `local/qa/run-20261021-193839/` PASS, four exits 0, no unexpected exceptions. Conflicting writers, six revisions, producer clear/refill, preview creation/drawing purity, confirmation/rollback, serialized admissions, live 20→30→60 Hz, primary reconnect while two observers remain, matching checks on every replica. |
+| Protocol + normal Release | 11405 assertions PASS again. Normal Release builds with 0 errors / 417 nullable warnings; QA-only harness is excluded. Original four save backups rehashed unchanged against the preserved fixture. |
+
+Remaining priorities: blueprint/platform and research/operator-goal regressions; constant-channel/trains canonicalization beyond the tested cargo ordering; cancel/disconnect during native snapshot loading; long-session memory/throughput soak; WAN/Steam transport tests. The original save and all engine logs/binaries remain private and excluded from Git and release archives.

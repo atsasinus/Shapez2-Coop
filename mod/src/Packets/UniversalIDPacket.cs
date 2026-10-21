@@ -26,6 +26,8 @@ namespace Shapez2Multiplayer.Packets
 
         public void Handle(IConnection? connection, InfoConnection? routedFrom = null)
         {
+            if (MultiplayerCore.Client && CoopSession.LocalPlayerId != 0 && UniversalId != CoopSession.LocalPlayerId)
+                throw new InvalidDataException("Connection identity disagrees with the authoritative welcome");
             if (MultiplayerCore.connectionManager != null) MultiplayerCore.connectionManager.UniversalId = UniversalId;
         }
     }

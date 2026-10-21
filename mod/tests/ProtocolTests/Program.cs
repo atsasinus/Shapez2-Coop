@@ -20,8 +20,46 @@ static class Program
     static Frame Intent(ulong id, byte value = 1) => new Frame(FrameKind.Intent, Epoch, id, 0, new[] { value });
     static void Main()
     {
-        Frames(); Host(); Client(); Snapshots();
+        Frames(); Host(); Client(); Snapshots(); SessionBoundaries(); Predictions();
         Console.WriteLine($"PASS: {checks} protocol assertions; frame fuzz/truncation, four participants, concurrent ordering, replay, fail-closed commits, bounded snapshots.");
+    }
+    static void SessionBoundaries()
+    {
+        foreach (var hz in new[] { 20, 30, 60 })
+        {
+            var welcome = SessionPayloads.Welcome(724, hz, 3);
+            var decoded = SessionPayloads.ReadWelcome(welcome);
+            Check(decoded.Step == 724 && decoded.Hz == hz && decoded.Player == 3, "shared simulation welcome");
+            var step = SessionPayloads.ReadStep(SessionPayloads.Step(9, hz));
+            Check(step.Revision == 9 && step.Hz == hz, "ordered rate/step boundary");
+            Check(9604980000L % hz == 0, "target game tick grid exactly represents supported frequency");
+            for (int length = 0; length < welcome.Length; length++)
+            { int n = length; Reject(() => SessionPayloads.ReadWelcome(welcome.AsSpan(0, n)), "welcome truncation"); }
+            var badRate = (byte[])welcome.Clone(); BinaryPrimitives.WriteInt32LittleEndian(badRate.AsSpan(8), 59);
+            Reject(() => SessionPayloads.ReadWelcome(badRate), "unsupported negotiated frequency");
+        }
+        Reject(() => SessionPayloads.Welcome(0, 20, 0), "host identity assigned to client");
+        Reject(() => SessionPayloads.Step(0, 120), "unsupported host setting");
+        Reject(() => SessionPayloads.ReadStep(new byte[11]), "truncated step boundary");
+        Reject(() => SessionPayloads.ReadWelcome(new byte[17]), "welcome trailing bytes");
+        Reject(() => SessionPayloads.Commit(1, Array.Empty<byte>()), "empty authoritative command");
+        Reject(() => SessionPayloads.Commit(1, new byte[SessionPayloads.MaxCommandBytes + 1]), "command bound");
+        Reject(() => SessionPayloads.ReadCommit(new byte[4]), "empty commit envelope");
+        var committed = SessionPayloads.ReadCommit(SessionPayloads.Commit(7, new byte[] { 12, 8 }));
+        Check(committed.Origin == 7 && committed.Command.Span.SequenceEqual(new byte[] { 12, 8 }), "authoritative origin and command preserved");
+    }
+    static void Predictions()
+    {
+        var pending = new PredictionLedger<string>(2, 2);
+        Check(pending.TryAdd(1, "build") && pending.TryAdd(2, "delete"), "bounded visual intents");
+        Check(!pending.TryAdd(1, "duplicate") && !pending.TryAdd(3, "overflow"), "prediction capacity and duplicates");
+        Check(!pending.Confirm(1, 1, out _) && pending.Count == 2, "other writer's equal request number cannot confirm preview");
+        Check(pending.Confirm(2, 1, out var build) && build == "build" && pending.Count == 1, "own commit resolves visual");
+        Check(pending.Reject(2, out var deletion) && deletion == "delete" && pending.Count == 0, "host refusal rolls back deletion visual");
+        Check(!pending.Confirm(2, 1, out _) && !pending.Reject(2, out _), "duplicate decisions are idempotent");
+        Check(!pending.TryAdd(0, "invalid"), "zero request has no visual");
+        pending.TryAdd(3, "old epoch"); pending.Clear();
+        Check(pending.Count == 0 && !pending.Confirm(2, 3, out _), "disconnect removes obsolete previews");
     }
     static void Frames()
     {

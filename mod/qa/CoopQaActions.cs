@@ -16,6 +16,7 @@ namespace Shapez2Multiplayer
         private PlaceBuildingPayload placement;
         private byte[] staleDelete;
         private BuildingId replacement;
+        private uint rollbacksBeforeStale;
         public bool Complete => phase == 9;
 
         private static ActionModifyBuildings Place(PlaceBuildingPayload payload) =>
@@ -78,11 +79,21 @@ namespace Shapez2Multiplayer
                 if (!map.TryGetBuilding(tile, out var building)) throw new InvalidOperationException("Replacement absent");
                 replacement = building.Id;
                 revision = CoopSession.EditRevision;
+                rollbacksBeforeStale = CoopPrediction.RolledBack;
                 if (!CoopSession.QaSubmitAtRevision(staleDelete, oldRevision)) throw new InvalidOperationException("Stale intent not sent");
+                if (CoopPrediction.PendingCount != 1) throw new InvalidOperationException("Stale deletion has no immediate preview");
                 phaseStep = CoopSession.StepCount; phase = 5;
             }
             else if (phase == 5 && CoopSession.StepCount >= phaseStep + 20)
             {
+                if (CoopPrediction.RolledBack == rollbacksBeforeStale)
+                {
+                    if (CoopSession.StepCount > phaseStep + (ulong)(CoopSession.SimulationHz * 5))
+                        throw new InvalidOperationException("Stale deletion preview was not rolled back");
+                    return;
+                }
+                if (CoopPrediction.PendingCount != 0 || CoopPrediction.VisualCount != 0)
+                    throw new InvalidOperationException("Rejected preview survived rollback");
                 if (CoopSession.EditRevision != revision || !map.TryGetBuilding(tile, out var building) ||
                     !building.Id.Equals(replacement)) throw new InvalidOperationException("Stale deletion changed replacement");
                 Debug.Log("QA:STALE_DELETE_PRESERVED revision=" + revision);
@@ -110,13 +121,22 @@ namespace Shapez2Multiplayer
         {
             revision = CoopSession.EditRevision;
             phaseStep = CoopSession.StepCount;
+            var before = CoopSimulation.Digest();
             if (!Shapez2Multiplayer.PlayerActions.TryScheduleAction(action)) throw new InvalidOperationException("QA action was not queued");
             if (CoopSession.EditRevision != revision) throw new InvalidOperationException("Local commit occurred before host response");
+            if (!before.SequenceEqual(CoopSimulation.Digest())) throw new InvalidOperationException("Preview creation mutated simulation state");
+            if (action is ActionModifyBuildings && (CoopPrediction.PendingCount != 1 || CoopPrediction.VisualCount == 0))
+                throw new InvalidOperationException("No immediate visual prediction for building action");
         }
         private bool Committed()
         {
-            if (CoopSession.EditRevision == revision + 1) return true;
-            if (CoopSession.StepCount > phaseStep + 100) throw new InvalidOperationException("QA action commit timeout");
+            if (CoopSession.EditRevision == revision + 1)
+            {
+                if (CoopPrediction.PendingCount != 0 || CoopPrediction.VisualCount != 0)
+                    throw new InvalidOperationException("Confirmed preview was not retired");
+                return true;
+            }
+            if (CoopSession.StepCount > phaseStep + (ulong)(CoopSession.SimulationHz * 5)) throw new InvalidOperationException("QA action commit timeout");
             return false;
         }
     }

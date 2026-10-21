@@ -17,6 +17,9 @@ namespace Shapez2Multiplayer
         private bool started, reported;
         private double deadline, menuReadyAt;
         private ulong? joinedStep;
+        private long? joinedTime;
+        private int initialHz = 20, rateStage;
+        private bool switchRates;
         private string stopFile;
         private readonly CoopQaActions actions = new CoopQaActions();
         private readonly CoopQaRace race = new CoopQaRace();
@@ -29,6 +32,10 @@ namespace Shapez2Multiplayer
             role = Environment.GetCommandLineArgs().FirstOrDefault(a => a.StartsWith("--coop-qa="))?.Substring(10);
             if (int.TryParse(Environment.GetEnvironmentVariable("SHAPEZ2_COOP_QA_PEERS"), out var peers))
                 expectedPeers = Math.Max(1, Math.Min(3, peers));
+            if (int.TryParse(Environment.GetEnvironmentVariable("SHAPEZ2_COOP_QA_HZ"), out var hz) &&
+                Shapez2Coop.Protocol.SessionPayloads.SupportedRate(hz)) initialHz = hz;
+            switchRates = Environment.GetEnvironmentVariable("SHAPEZ2_COOP_QA_SWITCH_RATES") == "1";
+            CoopSettings.Current.VisualPrediction = true;
             // Batchmode has no physical input devices. The game's localization tick reads
             // Keyboard.current even when no UI is being operated.
             if (Keyboard.current == null || Keyboard.current.keyboardLayout == null)
@@ -75,6 +82,7 @@ namespace Shapez2Multiplayer
                     var config = GameParameters.DefaultForMode(data.GetGameModeDefinition(data.GameModeIds.First()));
                     await Shapez2Multiplayer.GameOrchestrator.LoadSession(new GameStartOptionsStartNew(config, false, "coop-qa-factory"));
                     CoopQaProduction.Seed();
+                    if (!CoopSession.RequestSimulationRate(initialHz)) throw new InvalidOperationException("Initial QA frequency rejected");
                     await MultiplayerCore.CreateLobby(steam: false, ENet: true);
                     Debug.Log("QA:HOST_READY");
                 }
@@ -89,11 +97,27 @@ namespace Shapez2Multiplayer
                     {
                         if (!admittedPeers.Add(peer.UniversalId)) continue;
                         joinedStep = null;
+                        joinedTime = null;
                         Debug.Log("QA:HOST_JOIN number=" + admittedPeers.Count + " revision=" + CoopSession.EditRevision);
                     }
                     if (MultiplayerCore.socketManager.Connected.Count != expectedPeers) return;
                 }
-                if (!joinedStep.HasValue) joinedStep = CoopSession.StepCount;
+                if (!joinedStep.HasValue)
+                {
+                    joinedStep = CoopSession.StepCount;
+                    joinedTime = Shapez2Multiplayer.GameSessionOrchestrator.Simulator.SimulationTime.Value;
+                }
+                long elapsed = Shapez2Multiplayer.GameSessionOrchestrator.Simulator.SimulationTime.Value - joinedTime.Value;
+                long second = Game.Core.Simulation.Ticks.OneSecond.Value;
+                if (role == "host" && switchRates && admittedPeers.Count == expectedPeers)
+                {
+                    int rate = rateStage == 0 ? 30 : 60;
+                    if (rateStage < 2 && elapsed >= second * (rateStage == 0 ? 6 : 12))
+                    {
+                        if (!CoopSession.RequestSimulationRate(rate)) throw new InvalidOperationException("Live frequency change rejected");
+                        rateStage++;
+                    }
+                }
                 CoopQaProduction.Tick(role);
                 if (role == "host" || role == "client")
                 {
@@ -109,18 +133,27 @@ namespace Shapez2Multiplayer
                     if (!actions.Complete) return;
                 }
                 if (role != "client" && (CoopSession.EditRevision < 6 || !CoopQaProduction.Refilled)) return;
-                if (CoopSession.StepCount < joinedStep.Value + 200) return;
+                if (elapsed < second * (switchRates && !reconnectStarted ? 24 : 12)) return;
                 if (role == "host" && admittedPeers.Count < expectedPeers + 1) return;
                 if (role == "client" && !reconnectStarted)
                 {
+                    if (CoopPrediction.PendingCount != 0 || CoopPrediction.VisualCount != 0 ||
+                        CoopPrediction.Confirmed < 4 || CoopPrediction.RolledBack < 1 ||
+                        CoopPrediction.ForeignConfirmationsIgnored == 0 || CoopPrediction.DrawnObjects == 0)
+                    { reported = true; Debug.LogError("QA:FAIL Incomplete prediction evidence"); return; }
+                    Debug.Log("QA:PREDICTION_PASS confirmed=" + CoopPrediction.Confirmed + " rollback=" + CoopPrediction.RolledBack +
+                        " foreign=" + CoopPrediction.ForeignConfirmationsIgnored + " drawn=" + CoopPrediction.DrawnObjects);
                     reconnectStarted = true;
                     Debug.Log("QA:FIRST_SESSION_PASS revision=" + CoopSession.EditRevision);
                     try
                     {
                         MultiplayerCore.Disconnect(canReturnToMenu: false);
+                        if (CoopPrediction.PendingCount != 0 || CoopPrediction.VisualCount != 0)
+                            throw new InvalidOperationException("Disconnect retained visual predictions");
                         await Shapez2Multiplayer.GameOrchestrator.LoadMainMenu();
                         await System.Threading.Tasks.Task.Delay(2000);
                         joinedStep = null;
+                        joinedTime = null;
                         await MultiplayerCore.DirectConnect("127.0.0.1");
                         Debug.Log("QA:RECONNECT_REQUESTED");
                     }

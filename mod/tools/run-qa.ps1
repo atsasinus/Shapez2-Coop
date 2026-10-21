@@ -1,5 +1,7 @@
 param([ValidateRange(60,600)][int]$TimeoutSeconds = 180,
-      [ValidateRange(1,3)][int]$PeerCount = 1)
+      [ValidateRange(1,3)][int]$PeerCount = 1,
+      [ValidateSet(20,30,60)][int]$SimulationHz = 20,
+      [switch]$SwitchRates)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $qa = Join-Path $root 'local/qa'
@@ -13,7 +15,11 @@ $processes = @{}
 $oldProfile = $env:SHAPEZ2_COOP_QA_PROFILE
 $oldStop = $env:SHAPEZ2_COOP_QA_STOP_FILE
 $oldPeers = $env:SHAPEZ2_COOP_QA_PEERS
+$oldHz = $env:SHAPEZ2_COOP_QA_HZ
+$oldSwitch = $env:SHAPEZ2_COOP_QA_SWITCH_RATES
 $env:SHAPEZ2_COOP_QA_PEERS = "$PeerCount"
+$env:SHAPEZ2_COOP_QA_HZ = "$SimulationHz"
+$env:SHAPEZ2_COOP_QA_SWITCH_RATES = if ($SwitchRates) { '1' } else { '0' }
 $roles = @('host','client')
 for ($peer = 2; $peer -le $PeerCount; $peer++) { $roles += "observer-$peer" }
 $passed = $false
@@ -85,6 +91,23 @@ try {
     }
     if ($clientLog -notmatch 'QA:ACTIONS_PASS' -or $clientLog -notmatch 'QA:STALE_DELETE_PRESERVED' -or
         $clientLog -notmatch 'QA:INTENT_REJECT') { throw 'Missing client action/rejection evidence' }
+    if ($clientLog -notmatch 'QA:PREDICTION_PASS' -or $clientLog -notmatch 'QA:PREDICTION_RENDER_PURE') {
+        throw 'Missing prediction creation/draw/confirmation/rollback evidence'
+    }
+    foreach ($role in $roles) {
+        if ((Read-Log $role) -notmatch "QA:RATE_APPLIED role=\w+ hz=$SimulationHz step=\d+") { throw "Missing $role negotiated frequency" }
+    }
+    if ($SwitchRates) {
+        foreach ($hz in @(30,60)) {
+            $change = [regex]::Match($hostLog, "QA:RATE_APPLIED role=host hz=$hz step=(\d+)")
+            if (!$change.Success) { throw "Missing host live change to $hz Hz" }
+            foreach ($role in $roles | Where-Object { $_ -ne 'host' }) {
+                if ((Read-Log $role) -notmatch "QA:RATE_APPLIED role=client hz=$hz step=$($change.Groups[1].Value)\b") {
+                    throw "Missing $role common rate-change boundary"
+                }
+            }
+        }
+    }
     if ($hostLog -notmatch 'QA:RACE_SINGLE_COMMIT' -or $clientLog -notmatch 'QA:RACE_SINGLE_COMMIT' -or
         "$hostLog`n$clientLog" -notmatch 'QA:INTENT_REJECT request=1 revision=1') { throw 'Missing conflicting writer evidence' }
     foreach ($log in @($hostLog,$clientLog)) {
@@ -113,7 +136,9 @@ try {
     $env:SHAPEZ2_COOP_QA_PROFILE = $oldProfile
     $env:SHAPEZ2_COOP_QA_STOP_FILE = $oldStop
     $env:SHAPEZ2_COOP_QA_PEERS = $oldPeers
-    $result = @{ passed=($passed -and $cleanExit); peers=$PeerCount; cleanExit=$cleanExit; exitCodes=$exitCodes; problem=$problem; logs=$run }
+    $env:SHAPEZ2_COOP_QA_HZ = $oldHz
+    $env:SHAPEZ2_COOP_QA_SWITCH_RATES = $oldSwitch
+    $result = @{ passed=($passed -and $cleanExit); peers=$PeerCount; simulationHz=$SimulationHz; switchRates=[bool]$SwitchRates; cleanExit=$cleanExit; exitCodes=$exitCodes; problem=$problem; logs=$run }
     $result | ConvertTo-Json | Set-Content (Join-Path $run 'result.json')
     $result | ConvertTo-Json | Write-Output
 }

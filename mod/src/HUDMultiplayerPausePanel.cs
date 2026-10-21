@@ -15,6 +15,7 @@ namespace Shapez2Multiplayer
         public static HUDMultiplayerPausePanel? instance;
         public static List<HUDPlayerEntry> Entries = new List<HUDPlayerEntry>();
         private TextMeshProUGUI SessionStatus;
+        private HUDButton RateButton, PredictionButton;
         [Construct]
         private void Construct(IDependencyResolver DependencyResolver)
         {
@@ -29,6 +30,15 @@ namespace Shapez2Multiplayer
             //HostButton.transform.GetChild(0).GetComponent<Image>().sprite = Shapez2Multiplayer.HUDButtonBase;
             UIScrollContainer = transform.GetChild(4).GetComponent<HUDScrollContainer>();
             ScrollRect = UIScrollContainer.GetComponent<ScrollRect>();
+            UIScrollContainer.GetComponent<RectTransform>().offsetMin = new Vector2(0, 250);
+            RateButton = UIFactory.AddButton(transform, this, secondary: true);
+            RateButton.name = "SimulationFrequency";
+            ConfigureSettingButton(RateButton, 0, 0.5f);
+            RateButton.OnClick.AddListener(CycleRate);
+            PredictionButton = UIFactory.AddButton(transform, this, secondary: true);
+            PredictionButton.name = "VisualPrediction";
+            ConfigureSettingButton(PredictionButton, 0.5f, 1);
+            PredictionButton.OnClick.AddListener(TogglePrediction);
             instance = this;
             SessionStatus = UIFactory.AddTextPrimary(transform);
             SessionStatus.fontSize = 16;
@@ -126,7 +136,13 @@ namespace Shapez2Multiplayer
         }
         public override void OnUpdate(InputDownstreamContext context)
         {
-            if (SessionStatus != null) SessionStatus.text = "Co-op alpha | " + CoopSession.Status;
+            if (SessionStatus != null) SessionStatus.text = "Co-op alpha | " + CoopSession.Status +
+                (CoopPrediction.PendingCount == 0 ? "" : " | " + CoopPrediction.PendingCount + " pending");
+            int hz = CoopSession.Active ? CoopSession.SimulationHz : CoopSettings.Current.SimulationHz;
+            RateButton.Text = new CombinedText("multiplayer.simulation-frequency".T(), new RawText(": " + hz + " Hz"));
+            RateButton.Interactable = !MultiplayerCore.Client && !CoopSession.Faulted;
+            PredictionButton.Text = new CombinedText("multiplayer.visual-prediction".T(), new RawText(": "),
+                (CoopSettings.Current.VisualPrediction ? "multiplayer.on" : "multiplayer.off").T());
             HostButton.Interactable = !MultiplayerCore.InLobby || MultiplayerCore.Hosting;
             HostButton.Text = MultiplayerCore.InLobby && !MultiplayerCore.Hosting ? "multiplayer.inlobby".T() : MultiplayerCore.Hosting ? "multiplayer.stophosting".T() : "multiplayer.host".T();
             InviteButton.Interactable = MultiplayerCore.Hosting;
@@ -141,6 +157,22 @@ namespace Shapez2Multiplayer
             {
                 MultiplayerCore.CreateLobby(steam: SteamClient.IsValid, ENet: true);
             }
+        }
+        private void ConfigureSettingButton(HUDButton button, float left, float right)
+        {
+            var rect = button.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(left, 0); rect.anchorMax = new Vector2(right, 0);
+            rect.offsetMin = new Vector2(20, 180); rect.offsetMax = new Vector2(-20, 230);
+        }
+        private void CycleRate()
+        {
+            int hz = CoopSession.Active ? CoopSession.SimulationHz : CoopSettings.Current.SimulationHz;
+            CoopSession.RequestSimulationRate(hz == 20 ? 30 : hz == 30 ? 60 : 20);
+        }
+        private void TogglePrediction()
+        {
+            CoopSettings.Current.VisualPrediction = !CoopSettings.Current.VisualPrediction;
+            CoopPrediction.Clear(); CoopSettings.Save();
         }
         private HUDButton HostButton;
         private HUDButton InviteButton;

@@ -349,6 +349,7 @@ namespace Shapez2Multiplayer
                 socketManager?.Update();
                 connectionManager?.Update();
                 CoopSession.Update();
+                CoopPrediction.Update();
             }
             catch (Exception ex)
             {

@@ -20,7 +20,10 @@ namespace Shapez2Multiplayer
             var game = Shapez2Multiplayer.GameSessionOrchestrator;
             if (game == null) throw new InvalidOperationException("No world for simulation step");
             game.FinalizeLogicUpdate();
-            var delta = Ticks.OneSecond / 20;
+            int hz = CoopSession.SimulationHz;
+            if (!Shapez2Coop.Protocol.SessionPayloads.SupportedRate(hz) || Ticks.OneSecond.Value % hz != 0)
+                throw new InvalidOperationException("Simulation frequency is incompatible with the game's tick grid");
+            var delta = Ticks.OneSecond / hz;
             var config = new SimulationUpdateConfiguration(Array.Empty<SimulationLOD>(), TimeSpan.MaxValue, 0);
             var strategy = new ProcessingUpdateStrategy(SimulationConstants.MaxSimulationUpdateDelta,
                 SimulationConstants.MaxSimulatorIncrement, new[] { delta });

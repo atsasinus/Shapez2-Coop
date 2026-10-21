@@ -11,7 +11,7 @@ namespace Shapez2Coop.Protocol
 
     public enum FrameKind : byte
     {
-        Hello = 1, Welcome, Intent, Commit, Reject, SnapshotChunk, SnapshotReady, StateDigest, Disconnect, SimulationStep, StepAck
+        Hello = 1, Welcome, Intent, Commit, Reject, SnapshotChunk, SnapshotReady, StateDigest, Disconnect, SimulationStep, StepAck, SimulationRate
     }
 
     /// <summary>Transport identity and authorization are supplied by the caller, never by payload data.</summary>
@@ -39,11 +39,11 @@ namespace Shapez2Coop.Protocol
     public static class FrameCodec
     {
         public const uint Magic = 0x50433253; // S2CP, little endian
-        public const ushort Version = 1;
+        public const ushort Version = 2;
         public const int HeaderSize = 44;
         public const int MaxPayloadSize = 1024 * 1024;
         public const int MaxFrameSize = HeaderSize + MaxPayloadSize;
-        internal static bool IsKnownKind(FrameKind kind) => kind >= FrameKind.Hello && kind <= FrameKind.StepAck;
+        internal static bool IsKnownKind(FrameKind kind) => kind >= FrameKind.Hello && kind <= FrameKind.SimulationRate;
 
         public static byte[] Encode(Frame frame)
         {

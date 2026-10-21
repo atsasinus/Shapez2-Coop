@@ -1,4 +1,4 @@
-﻿{
+{
   "en-US": {
     "menu.multiplayer.title": "MULTIPLAYER",
     "menu.multiplayer.refresh": "REFRESH",
@@ -27,6 +27,10 @@
     "multiplayer.connecting-dialog.cancel": "CANCEL",
     "multiplayer.report-issue": "REPORT ISSUE",
     "multiplayer.invite": "INVITE",
-    "multiplayer.player-lost-connection": "<player-name/> lost connection."
+    "multiplayer.player-lost-connection": "<player-name/> lost connection.",
+    "multiplayer.simulation-frequency": "Simulation rate",
+    "multiplayer.visual-prediction": "Instant previews",
+    "multiplayer.on": "on",
+    "multiplayer.off": "off"
   }
 }

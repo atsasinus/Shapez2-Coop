@@ -79,6 +79,7 @@ namespace Shapez2Multiplayer
         public Shapez2Multiplayer(ILogger logger)
         {
             Shapez2Multiplayer.logger = logger;
+            CoopSettings.Load();
             harmony = new Harmony("bknibb.Shapez2Multiplayer");
             harmony.PatchAll(Assembly.GetExecutingAssembly());
             // Assembly discovery requires the class annotation, even for method-level patches.
@@ -205,7 +206,7 @@ namespace Shapez2Multiplayer
             MultiplayerPausePanelRectTransform.anchorMin = new Vector2(1, 0);
             MultiplayerPausePanelRectTransform.anchorMax = new Vector2(1, 0);
             MultiplayerPausePanelRectTransform.offsetMin = new Vector2(-500, 150);
-            MultiplayerPausePanelRectTransform.offsetMax = new Vector2(-20, 550);
+            MultiplayerPausePanelRectTransform.offsetMax = new Vector2(-20, 650);
             GameObject HUDPrimaryLightPanelMainMenu = UIFactory.AddPanel(hudMultiplayerPausePanel.transform, hudMultiplayerPausePanel);
             HUDButton HostButton = UIFactory.AddButton(hudMultiplayerPausePanel.transform, hudMultiplayerPausePanel);
             HostButton.name = "HostButton";

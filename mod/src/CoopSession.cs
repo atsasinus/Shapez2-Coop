@@ -17,6 +17,7 @@ namespace Shapez2Multiplayer
         {
             public double Deadline;
             public bool Admitted;
+            public bool WaitingSnapshot;
             public ulong LastRequest;
         }
         private static readonly Dictionary<IConnection, PeerState> Peers = new Dictionary<IConnection, PeerState>();
@@ -27,6 +28,7 @@ namespace Shapez2Multiplayer
         public static ulong EditRevision => Revision;
         private static double NextStep;
         private static bool Welcomed;
+        public static bool ClientPausedForJoin;
         public static bool Applying { get; private set; }
         public static bool ReplicaWorld;
         public static GameSessionOrchestrator? ReplicaSession;
@@ -35,7 +37,7 @@ namespace Shapez2Multiplayer
         public static bool Active => MultiplayerCore.Hosting || MultiplayerCore.Client;
         public static bool Ready => Active && !Faulted && (MultiplayerCore.Hosting
             ? MultiplayerCore.socketManager.Connecting.Count == 0
-            : Welcomed && MultiplayerCore.connectionManager.FinishedConnecting);
+            : Welcomed && MultiplayerCore.connectionManager.FinishedConnecting && !ClientPausedForJoin);
         private static double Now => Time.realtimeSinceStartupAsDouble;
         // Game assembly MVIDs detect binary differences, including builds sharing a version label.
         private static string Compatibility => "coop-alpha-3|" + GameEnvironmentManager.Version + "|" +
@@ -46,7 +48,7 @@ namespace Shapez2Multiplayer
         public static void Reset()
         {
             Peers.Clear(); Inbox.Clear(); Epoch = Guid.Empty;
-            Revision = RequestId = Step = 0; Welcomed = Applying = Faulted = false;
+            Revision = RequestId = Step = 0; Welcomed = Applying = Faulted = ClientPausedForJoin = false;
             Status = "Offline"; NextStep = 0;
         }
         public static void StartHost()
@@ -61,7 +63,7 @@ namespace Shapez2Multiplayer
         }
         public static void ConnectedToHost()
         {
-            Reset(); Epoch = Guid.NewGuid(); Status = "Checking compatibility";
+            Reset(); ClientPausedForJoin = true; Epoch = Guid.NewGuid(); Status = "Checking compatibility";
             SendHost(new Frame(FrameKind.Hello, Epoch, 0, 0, System.Text.Encoding.UTF8.GetBytes(Compatibility)));
         }
         public static void Remove(IConnection peer) => Peers.Remove(peer);
@@ -141,6 +143,11 @@ namespace Shapez2Multiplayer
                     var item = Inbox.Dequeue();
                     Handle(item.Peer, item.Frame);
                 }
+                if (MultiplayerCore.Hosting && MultiplayerCore.socketManager.Connecting.Count == 0)
+                {
+                    var waiting = Peers.FirstOrDefault(p => p.Value.WaitingSnapshot);
+                    if (waiting.Key != null) BeginSnapshot(waiting.Key, waiting.Value);
+                }
                 if (MultiplayerCore.Hosting && Ready && Now >= NextStep)
                 {
                     NextStep = Now + 0.05;
@@ -163,19 +170,26 @@ namespace Shapez2Multiplayer
                 Fail(ex.Message);
             }
         }
+        private static void BeginSnapshot(IConnection peer, PeerState state)
+        {
+            Broadcast(new Frame(FrameKind.SnapshotReady, Epoch, 0, Step, Array.Empty<byte>()));
+            foreach (var admitted in Peers.Values.Where(p => p.Admitted)) admitted.Deadline = Now + 120;
+            state.WaitingSnapshot = false; state.Admitted = true; state.Deadline = Now + 120;
+            Send(peer, new Frame(FrameKind.Welcome, Epoch, 0, Revision, BitConverter.GetBytes(Step)));
+            MultiplayerCore.socketManager.Admit(peer);
+        }
+
         private static void Handle(IConnection? peer, Frame frame)
         {
             if (MultiplayerCore.Hosting && frame.Kind == FrameKind.Hello)
             {
-                if (peer == null || !Peers.TryGetValue(peer, out var state) || state.Admitted)
+                if (peer == null || !Peers.TryGetValue(peer, out var state) || state.Admitted || state.WaitingSnapshot)
                     throw new InvalidDataException("Unexpected hello");
                 if (System.Text.Encoding.UTF8.GetString(frame.Payload.ToArray()) != Compatibility)
                 { Peers.Remove(peer); peer.Close(); return; }
-                Broadcast(new Frame(FrameKind.SnapshotReady, Epoch, 0, Step, Array.Empty<byte>()));
-                state.Admitted = true; state.Deadline = Now + 120;
-                var boundary = BitConverter.GetBytes(Step);
-                Send(peer, new Frame(FrameKind.Welcome, Epoch, 0, Revision, boundary));
-                MultiplayerCore.socketManager.Admit(peer);
+                // A loading client has no world to prepare for somebody else's join.
+                // Serialize admissions; at most three peers can wait in the session.
+                state.WaitingSnapshot = true; state.Deadline = Now + 300;
                 return;
             }
             if (MultiplayerCore.Client && frame.Kind == FrameKind.Welcome && !Welcomed)

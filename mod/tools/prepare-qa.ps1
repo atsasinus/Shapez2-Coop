@@ -1,4 +1,4 @@
-param([ValidateSet('profile','client-profile')][string]$ProfileName = 'profile')
+param([ValidateSet('profile','client-profile','observer-2-profile','observer-3-profile')][string]$ProfileName = 'profile')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $profile = Join-Path $root "local/qa/$ProfileName"

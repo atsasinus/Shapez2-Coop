@@ -56,7 +56,9 @@ namespace Shapez2Multiplayer
         {
             if (ReferenceEquals(null, other)) return false;
             if (ReferenceEquals(this, other)) return true;
-            return Id == other.Id;
+            // ENet reuses peer slots after disconnect. Old queued work must never
+            // compare equal to a new occupant of that slot.
+            return UniversalId == other.UniversalId;
         }
         public override bool Equals(object obj)
         {
@@ -64,7 +66,7 @@ namespace Shapez2Multiplayer
         }
         public override int GetHashCode()
         {
-            return (int)Id;
+            return (int)UniversalId;
         }
         public static bool operator ==(ENetConnection? left, ENetConnection? right)
         {

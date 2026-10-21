@@ -35,6 +35,7 @@ namespace Shapez2Multiplayer.Packets
         public static HUDDialogSimpleInfo? Dialog;
         public void Handle(IConnection? connection, InfoConnection? routedFrom = null)
         {
+            if (MultiplayerCore.Client) CoopSession.ClientPausedForJoin = Pause;
             Shapez2Multiplayer.BypassSimulationSpeedCheck = true;
             Shapez2Multiplayer.SimulationSpeed.IsPaused = Pause;
             Shapez2Multiplayer.BypassSimulationSpeedCheck = false;

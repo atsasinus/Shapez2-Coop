@@ -19,10 +19,15 @@ namespace Shapez2Multiplayer
         private ulong? joinedStep;
         private string stopFile;
         private readonly CoopQaActions actions = new CoopQaActions();
+        private readonly System.Collections.Generic.HashSet<uint> admittedPeers = new System.Collections.Generic.HashSet<uint>();
+        private int expectedPeers = 1;
+        private bool reconnectStarted;
         private void Start()
         {
             stopFile = Environment.GetEnvironmentVariable("SHAPEZ2_COOP_QA_STOP_FILE");
             role = Environment.GetCommandLineArgs().FirstOrDefault(a => a.StartsWith("--coop-qa="))?.Substring(10);
+            if (int.TryParse(Environment.GetEnvironmentVariable("SHAPEZ2_COOP_QA_PEERS"), out var peers))
+                expectedPeers = Math.Max(1, Math.Min(3, peers));
             // Batchmode has no physical input devices. The game's localization tick reads
             // Keyboard.current even when no UI is being operated.
             if (Keyboard.current == null || Keyboard.current.keyboardLayout == null)
@@ -64,7 +69,7 @@ namespace Shapez2Multiplayer
                 started = true;
                 try
                 {
-                    if (role == "client") { await MultiplayerCore.DirectConnect("127.0.0.1"); return; }
+                    if (role != "host") { await MultiplayerCore.DirectConnect("127.0.0.1"); return; }
                     var data = Shapez2Multiplayer.GameOrchestrator.InitializationDependencyContainer.Resolve<IGameData>();
                     var config = GameParameters.DefaultForMode(data.GetGameModeDefinition(data.GameModeIds.First()));
                     await Shapez2Multiplayer.GameOrchestrator.LoadSession(new GameStartOptionsStartNew(config, false, "coop-qa-factory"));
@@ -76,18 +81,49 @@ namespace Shapez2Multiplayer
             }
             if (CoopSession.Ready)
             {
-                if (role == "host" && MultiplayerCore.socketManager.Connected.Count != 1) return;
-                if (role == "client" && !MultiplayerCore.connectionManager.FinishedConnecting) return;
+                if (role != "host" && !MultiplayerCore.connectionManager.FinishedConnecting) return;
+                if (role == "host")
+                {
+                    foreach (var peer in MultiplayerCore.socketManager.Connected)
+                    {
+                        if (!admittedPeers.Add(peer.UniversalId)) continue;
+                        joinedStep = null;
+                        Debug.Log("QA:HOST_JOIN number=" + admittedPeers.Count + " revision=" + CoopSession.EditRevision);
+                    }
+                    if (MultiplayerCore.socketManager.Connected.Count != expectedPeers) return;
+                }
                 if (!joinedStep.HasValue) joinedStep = CoopSession.StepCount;
                 CoopQaProduction.Tick(role);
                 if (role == "client")
                 {
+                    if (!reconnectStarted && MultiplayerCore.connectionManager.Connections.Count < expectedPeers) return;
                     try { actions.Tick(); }
                     catch (Exception ex) { reported = true; Debug.LogError("QA:FAIL " + ex); return; }
                     if (!actions.Complete) return;
                 }
                 if (role == "host" && (CoopSession.EditRevision < 5 || !CoopQaProduction.Refilled)) return;
                 if (CoopSession.StepCount < joinedStep.Value + 200) return;
+                if (role == "host" && admittedPeers.Count < expectedPeers + 1) return;
+                if (role == "client" && !reconnectStarted)
+                {
+                    reconnectStarted = true;
+                    Debug.Log("QA:FIRST_SESSION_PASS revision=" + CoopSession.EditRevision);
+                    try
+                    {
+                        MultiplayerCore.Disconnect(canReturnToMenu: false);
+                        await Shapez2Multiplayer.GameOrchestrator.LoadMainMenu();
+                        await System.Threading.Tasks.Task.Delay(2000);
+                        joinedStep = null;
+                        await MultiplayerCore.DirectConnect("127.0.0.1");
+                        Debug.Log("QA:RECONNECT_REQUESTED");
+                    }
+                    catch (Exception ex) { reported = true; Debug.LogError("QA:FAIL " + ex); }
+                    return;
+                }
+                if (CoopSession.EditRevision != 5)
+                { reported = true; Debug.LogError("QA:FAIL Reconnect lost authoritative edit revision"); return; }
+                Debug.Log((role == "host" || role == "client" ? "QA:RECONNECT_PASS" : "QA:OBSERVER_READY") +
+                    " role=" + role + " revision=" + CoopSession.EditRevision);
                 reported = true;
                 Debug.Log("QA:STEPS_PASS role=" + role + " step=" + CoopSession.StepCount + " digest=" + BitConverter.ToString(CoopSimulation.Digest()));
             }

@@ -54,6 +54,7 @@ namespace Shapez2Multiplayer
                     throw new InvalidOperationException("Required co-op hook missing: " + method);
             }
             Debug.Log("QA:HOOKS_PRESENT");
+            if (role != null && role.StartsWith("perf-")) { gameObject.AddComponent<CoopQaPerf>().Role = role; role = null; return; }
             if (role == "ui") { gameObject.AddComponent<CoopQaUi>(); role = null; return; }
             deadline = Time.realtimeSinceStartupAsDouble + 360;
             Debug.Log("QA:MOD_LOADED role=" + role + " data=" + GameEnvironment.DataPath);

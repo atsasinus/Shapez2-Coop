@@ -41,6 +41,7 @@ namespace Shapez2Multiplayer
 
         public void OnDisconnected(DisconnectReason reason)
         {
+            Shapez2Multiplayer.logger.Warning?.Log("ENet host disconnected reason=" + reason + " step=" + CoopSession.StepCount);
             Connected = false;
             DisconnectedEvent(reason);
         }

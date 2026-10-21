@@ -78,10 +78,12 @@ namespace Shapez2Multiplayer
                         break;
 
                     case EventType.Disconnect:
+                        Shapez2Multiplayer.logger.Warning?.Log("ENet peer disconnect id=" + netEvent.Peer.ID + " step=" + CoopSession.StepCount);
                         OnDisconnected(netEvent.Peer);
                         break;
 
                     case EventType.Timeout:
+                        Shapez2Multiplayer.logger.Warning?.Log("ENet peer timeout id=" + netEvent.Peer.ID + " step=" + CoopSession.StepCount);
                         OnDisconnected(netEvent.Peer);
                         break;
 

@@ -176,6 +176,8 @@ namespace Shapez2Multiplayer
 #endif
                 foreach (var peer in Peers.Where(p => p.Value.Deadline < Now).Select(p => p.Key).ToArray())
                 {
+                    Shapez2Multiplayer.logger.Warning?.Log("Peer deadline expired: admitted=" + Peers[peer].Admitted +
+                        " waiting=" + Peers[peer].WaitingSnapshot + " step=" + Step);
                     Peers[peer].Deadline = double.PositiveInfinity; peer.Close();
                 }
                 // Join packets are pure data; state mutations wait for the engine's simulation barrier.

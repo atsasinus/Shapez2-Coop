@@ -26,6 +26,7 @@ namespace Shapez2Multiplayer
         private static ulong Revision, RequestId, Step;
         public static ulong StepCount => Step;
         public static ulong EditRevision => Revision;
+        public static ulong SnapshotStep { get; private set; }
         private static double NextStep;
         private static bool Welcomed;
         public static bool ClientPausedForJoin;
@@ -48,7 +49,7 @@ namespace Shapez2Multiplayer
         public static void Reset()
         {
             Peers.Clear(); Inbox.Clear(); Epoch = Guid.Empty;
-            Revision = RequestId = Step = 0; Welcomed = Applying = Faulted = ClientPausedForJoin = false;
+            Revision = RequestId = Step = SnapshotStep = 0; Welcomed = Applying = Faulted = ClientPausedForJoin = false;
             Status = "Offline"; NextStep = 0;
         }
         public static void StartHost()
@@ -172,6 +173,7 @@ namespace Shapez2Multiplayer
         }
         private static void BeginSnapshot(IConnection peer, PeerState state)
         {
+            SnapshotStep = Step;
             Broadcast(new Frame(FrameKind.SnapshotReady, Epoch, 0, Step, Array.Empty<byte>()));
             foreach (var admitted in Peers.Values.Where(p => p.Admitted)) admitted.Deadline = Now + 120;
             state.WaitingSnapshot = false; state.Admitted = true; state.Deadline = Now + 120;
@@ -196,6 +198,7 @@ namespace Shapez2Multiplayer
             {
                 if (frame.Payload.Length != 8) throw new InvalidDataException("Invalid snapshot boundary");
                 Epoch = frame.Epoch; Revision = frame.Sequence; Step = BitConverter.ToUInt64(frame.Payload.ToArray(), 0);
+                SnapshotStep = Step;
                 Welcomed = true; Status = "Loading host snapshot"; return;
             }
             if (frame.Epoch != Epoch) throw new InvalidDataException("Stale session epoch");
@@ -223,7 +226,13 @@ namespace Shapez2Multiplayer
                         Broadcast(new Frame(FrameKind.Commit, Epoch, frame.RequestId, ++Revision, frame.Payload.Span));
                     else if (peer != null)
                         Send(peer, new Frame(FrameKind.Reject, Epoch, frame.RequestId, Revision, Array.Empty<byte>()));
-                    else Status = "Edit rejected: world changed; retry";
+                    else
+                    {
+#if COOP_QA
+                        Debug.Log("QA:INTENT_REJECT request=" + frame.RequestId + " revision=" + Revision);
+#endif
+                        Status = "Edit rejected: world changed; retry";
+                    }
                     return;
                 }
                 if (frame.Kind == FrameKind.StepAck && peer != null)
@@ -254,6 +263,7 @@ namespace Shapez2Multiplayer
                     break;
                 case FrameKind.SnapshotReady:
                     if (frame.Sequence != Step) throw new InvalidDataException("Snapshot preparation boundary mismatch");
+                    SnapshotStep = Step;
                     CoopSimulation.PrepareSnapshot();
                     CoopSimulation.Digest(); // Apply the same signal-channel serialization maintenance as host capture.
                     break;

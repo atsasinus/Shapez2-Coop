@@ -19,6 +19,7 @@ namespace Shapez2Multiplayer
         private ulong? joinedStep;
         private string stopFile;
         private readonly CoopQaActions actions = new CoopQaActions();
+        private readonly CoopQaRace race = new CoopQaRace();
         private readonly System.Collections.Generic.HashSet<uint> admittedPeers = new System.Collections.Generic.HashSet<uint>();
         private int expectedPeers = 1;
         private bool reconnectStarted;
@@ -94,6 +95,12 @@ namespace Shapez2Multiplayer
                 }
                 if (!joinedStep.HasValue) joinedStep = CoopSession.StepCount;
                 CoopQaProduction.Tick(role);
+                if (role == "host" || role == "client")
+                {
+                    if (role == "client" && !reconnectStarted && MultiplayerCore.connectionManager.Connections.Count < expectedPeers) return;
+                    try { if (!race.Tick(role)) return; }
+                    catch (Exception ex) { reported = true; Debug.LogError("QA:FAIL " + ex); return; }
+                }
                 if (role == "client")
                 {
                     if (!reconnectStarted && MultiplayerCore.connectionManager.Connections.Count < expectedPeers) return;
@@ -101,7 +108,7 @@ namespace Shapez2Multiplayer
                     catch (Exception ex) { reported = true; Debug.LogError("QA:FAIL " + ex); return; }
                     if (!actions.Complete) return;
                 }
-                if (role == "host" && (CoopSession.EditRevision < 5 || !CoopQaProduction.Refilled)) return;
+                if (role != "client" && (CoopSession.EditRevision < 6 || !CoopQaProduction.Refilled)) return;
                 if (CoopSession.StepCount < joinedStep.Value + 200) return;
                 if (role == "host" && admittedPeers.Count < expectedPeers + 1) return;
                 if (role == "client" && !reconnectStarted)
@@ -120,7 +127,7 @@ namespace Shapez2Multiplayer
                     catch (Exception ex) { reported = true; Debug.LogError("QA:FAIL " + ex); }
                     return;
                 }
-                if (CoopSession.EditRevision != 5)
+                if (CoopSession.EditRevision != 6)
                 { reported = true; Debug.LogError("QA:FAIL Reconnect lost authoritative edit revision"); return; }
                 Debug.Log((role == "host" || role == "client" ? "QA:RECONNECT_PASS" : "QA:OBSERVER_READY") +
                     " role=" + role + " revision=" + CoopSession.EditRevision);

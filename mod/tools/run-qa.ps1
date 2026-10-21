@@ -85,6 +85,8 @@ try {
     }
     if ($clientLog -notmatch 'QA:ACTIONS_PASS' -or $clientLog -notmatch 'QA:STALE_DELETE_PRESERVED' -or
         $clientLog -notmatch 'QA:INTENT_REJECT') { throw 'Missing client action/rejection evidence' }
+    if ($hostLog -notmatch 'QA:RACE_SINGLE_COMMIT' -or $clientLog -notmatch 'QA:RACE_SINGLE_COMMIT' -or
+        "$hostLog`n$clientLog" -notmatch 'QA:INTENT_REJECT request=1 revision=1') { throw 'Missing conflicting writer evidence' }
     foreach ($log in @($hostLog,$clientLog)) {
         if ($log -notmatch 'QA:OUTPUT_CLEARED' -or $log -notmatch 'QA:OUTPUT_REFILLED') { throw 'Missing production evidence' }
     }
